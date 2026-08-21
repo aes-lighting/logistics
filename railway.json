@@ -4,7 +4,7 @@
     "builder": "dockerfile"
   },
   "deploy": {
-    "startCommand": "sh -c 'gunicorn -w 2 -b 0.0.0.0:$PORT --timeout 120 app:app'",
+    "startCommand": "cd server && gunicorn -w 2 -b 0.0.0.0:$PORT --timeout 120 app:app",
     "restartPolicyMaxRetries": 5
   }
 }
