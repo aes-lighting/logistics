@@ -1,0 +1,15 @@
+{
+  "_job_number_pattern_note": "PLACEHOLDER - tune against real packing slip photos. Uses a named group (?P<job>...).",
+  "job_number_pattern": "job\\s*#?\\s*:?\\s*(?P<job>\\d{3,8})",
+
+  "incoming_dir": "./incoming",
+  "dest_dir": "./organized",
+  "review_folder": "needs_review_no_job_number",
+  "incomplete_flag_filename": "INCOMPLETE_missing_pallet_photo.txt",
+
+  "_incoming_inventory_note": "Settings for the Incoming Inventory (packing slip) flow, separate from the delivery-ticket flow above.",
+  "incoming_staging_dir": "./incoming/_staging",
+  "incoming_slip_subfolder": "Incoming_Packing_Slips",
+  "flagged_slips_folder": "flagged_packing_slips",
+  "flag_alert_email_to": "PMteam@aes-energy.com"
+}

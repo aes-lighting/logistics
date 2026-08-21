@@ -1,0 +1,8 @@
+flask>=3.0
+pillow>=10.0
+pytesseract>=0.3.10
+gunicorn>=21.0
+python-dotenv>=1.0
+icalendar>=5.0
+requests>=2.31
+twilio>=9.0

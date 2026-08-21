@@ -1,0 +1,15 @@
+{
+  "name": "AES Logistics",
+  "short_name": "AES Logistics",
+  "description": "Delivery photo capture for AES Logistics drivers",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14171C",
+  "theme_color": "#14171C",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#14171C">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>AES Logistics</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- Login: driver self-service (name + code, first use registers it) -->
+  <section id="screen-login" class="screen hidden">
+    <div class="setup-card">
+      <div class="wordmark">AES<span>LOGISTICS</span></div>
+      <p class="setup-label">Driver / Warehouse Login</p>
+
+      <input id="login-name-input" type="text" placeholder="Your name" autocomplete="off">
+      <input id="login-code-input" type="text" placeholder="Your code (6 digits or a word)" autocomplete="off">
+      <p class="hint login-hint">First time? Just make up a code here — it becomes yours from now on.</p>
+
+      <div id="login-error" class="login-error hidden"></div>
+
+      <button id="btn-login-driver" class="btn btn-primary btn-full">Log In</button>
+      <button id="btn-goto-admin-login" class="btn-link">Admin Login</button>
+    </div>
+  </section>
+
+  <!-- Login: fixed admin account -->
+  <section id="screen-admin-login" class="screen hidden">
+    <div class="setup-card">
+      <div class="wordmark">AES<span>LOGISTICS</span></div>
+      <p class="setup-label">Admin / PM Login</p>
+
+      <input id="admin-login-email-input" type="email" placeholder="Admin email" autocomplete="off">
+      <input id="admin-login-password-input" type="password" placeholder="Password" autocomplete="off">
+
+      <div id="admin-login-error" class="login-error hidden"></div>
+
+      <button id="btn-login-admin" class="btn btn-primary btn-full">Log In</button>
+      <button id="btn-goto-driver-login" class="btn-link">Back to Driver Login</button>
+    </div>
+  </section>
+
+  <!-- Role menu: shown after every login -->
+  <section id="screen-role-menu" class="screen hidden">
+    <header class="topbar">
+      <div class="wordmark small">AES<span>LOGISTICS</span></div>
+      <button id="btn-role-menu-logout" class="icon-btn" title="Log out">&#9881;</button>
+    </header>
+    <p class="setup-label center">Choose what you're doing</p>
+    <div id="role-menu-tiles" class="role-tiles"><!-- populated by JS --></div>
+  </section>
+
+  <!-- Home screen -->
+  <section id="screen-home" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-switch-role" class="icon-btn" title="Switch role">&#8635;</button>
+      <div class="wordmark small">AES<span>LOGISTICS</span></div>
+      <button id="btn-change-driver" class="icon-btn" title="Log out">&#9881;</button>
+    </header>
+
+    <div class="driver-banner">
+      Logged in as: <strong id="driver-name-display"></strong>
+      <button id="btn-logout" class="btn-link inline-link">Log Out</button>
+    </div>
+
+    <div id="section-drivers" class="hidden">
+      <button id="btn-new-delivery" class="btn btn-primary btn-huge">
+        + New Delivery
+      </button>
+
+      <div class="queue-section">
+        <div class="queue-header">
+          <h2>My Deliveries</h2>
+          <span id="scheduled-count" class="badge">0</span>
+        </div>
+        <div id="scheduled-list" class="queue-list"><!-- populated by JS --></div>
+      </div>
+
+      <div class="queue-section">
+        <div class="queue-header">
+          <h2>Pending Sync</h2>
+          <span id="queue-count" class="badge">0</span>
+        </div>
+        <div id="queue-list" class="queue-list"><!-- populated by JS --></div>
+
+        <button id="btn-sync" class="btn btn-accent btn-full" disabled>
+          Sync Now
+        </button>
+        <div id="sync-status" class="sync-status"></div>
+      </div>
+    </div>
+
+    <div id="section-warehouse" class="hidden">
+      <button id="btn-incoming-inventory" class="btn btn-secondary btn-huge menu-spacing">
+        + Incoming Inventory
+      </button>
+      <p class="hint center">Requires signal &mdash; scans and confirms in real time.</p>
+
+      <div class="queue-section">
+        <div class="queue-header">
+          <h2>Incoming Inventory &mdash; Pending</h2>
+          <span id="incoming-queue-count" class="badge">0</span>
+        </div>
+        <div id="incoming-queue-list" class="queue-list"><!-- populated by JS --></div>
+
+        <button id="btn-incoming-retry" class="btn btn-accent btn-full" disabled>
+          Retry Now
+        </button>
+        <div id="incoming-retry-status" class="sync-status"></div>
+      </div>
+
+      <div class="queue-section">
+        <div class="queue-header">
+          <h2>Outgoing Inventory &mdash; Ready to Pack</h2>
+          <span id="pack-count" class="badge">0</span>
+        </div>
+        <p class="hint">Tickets waiting to be packed, checked off, and signed before a driver can take them.</p>
+        <div id="pack-list" class="queue-list"><!-- populated by JS --></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Outgoing Inventory: pack + checkoff + sign a ticket -->
+  <section id="screen-pack-ticket" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-pack-cancel" class="icon-btn">&#10005;</button>
+      <div class="capture-title">Pack Order</div>
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <div class="capture-body">
+      <div class="photo-group">
+        <h3>Ticket &mdash; Job #<span id="pack-job-number"></span></h3>
+        <img id="pack-ticket-image" class="confirm-thumb" alt="Delivery ticket">
+      </div>
+
+      <div class="photo-group">
+        <h3>Check Off Items</h3>
+        <div id="pack-line-items"><!-- populated by JS: checkboxes or single overall checkbox --></div>
+      </div>
+
+      <div class="photo-group">
+        <h3>Packed By</h3>
+        <label class="field-label" for="pack-packed-by-input">Your name</label>
+        <input type="text" id="pack-packed-by-input" class="job-number-input" placeholder="Who packed this order">
+
+        <canvas id="pack-signature-canvas" class="signature-canvas"></canvas>
+        <button id="btn-pack-clear-signature" class="btn btn-secondary btn-full menu-spacing-sm">Clear Signature</button>
+      </div>
+    </div>
+
+    <div class="capture-footer">
+      <p id="pack-complete-hint" class="complete-hint">Check off all items, enter your name, and sign to finish.</p>
+      <button id="btn-pack-complete" class="btn btn-primary btn-huge" disabled>
+        Confirm Packed &amp; Sign
+      </button>
+    </div>
+  </section>
+
+  <!-- Outgoing Inventory: packing done -->
+  <section id="screen-pack-done" class="screen hidden">
+    <div class="stamp-wrap">
+      <div class="stamp">PACKED &amp;<br>VERIFIED</div>
+    </div>
+    <p id="pack-done-sub" class="stamp-sub">This order is now ready for a driver to pick up.</p>
+    <button id="btn-pack-done-home" class="btn btn-primary btn-full">Back to Home</button>
+  </section>
+
+  <!-- Capture / delivery-in-progress screen -->
+  <section id="screen-capture" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-cancel-delivery" class="icon-btn">&#10005;</button>
+      <div class="capture-title">New Delivery</div>
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <div class="capture-body">
+
+      <div class="photo-group">
+        <div class="photo-group-header">
+          <span class="req-dot" data-filled="false"></span>
+          <h3>Delivery Ticket / Packing Slip</h3>
+        </div>
+        <p class="hint">Take a clear photo of the ticket showing the job number.</p>
+        <div id="ticket-thumbs" class="thumb-row"></div>
+        <label class="btn btn-secondary btn-full capture-btn">
+          Take Ticket Photo
+          <input type="file" accept="image/*" capture="environment" id="input-ticket" hidden>
+        </label>
+      </div>
+
+      <div class="photo-group">
+        <div class="photo-group-header">
+          <span class="req-dot" data-filled="false"></span>
+          <h3>Pallet / Boxes</h3>
+        </div>
+        <p class="hint">Required for every delivery &mdash; photo of the pallet or boxes delivered.</p>
+        <div id="pallet-thumbs" class="thumb-row"></div>
+        <label class="btn btn-secondary btn-full capture-btn">
+          Take Pallet/Box Photo
+          <input type="file" accept="image/*" capture="environment" id="input-pallet" hidden>
+        </label>
+      </div>
+
+    </div>
+
+    <div class="capture-footer">
+      <p id="complete-hint" class="complete-hint">Add at least 1 ticket photo and 1 pallet/box photo to complete.</p>
+      <button id="btn-complete-delivery" class="btn btn-primary btn-huge" disabled>
+        Complete Delivery
+      </button>
+    </div>
+  </section>
+
+  <!-- Delivery complete confirmation (stamp moment) -->
+  <section id="screen-complete" class="screen hidden">
+    <div class="stamp-wrap">
+      <div class="stamp">DELIVERY<br>LOGGED</div>
+    </div>
+    <p class="stamp-sub">Queued for sync &mdash; tap <strong>Sync Now</strong> at end of shift.</p>
+    <button id="btn-back-home" class="btn btn-primary btn-full">Back to Home</button>
+  </section>
+
+  <!-- Incoming Inventory: take the packing slip photo -->
+  <section id="screen-incoming-capture" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-cancel-incoming" class="icon-btn">&#10005;</button>
+      <div class="capture-title">Incoming Inventory</div>
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <div class="capture-body">
+      <div class="photo-group">
+        <div class="photo-group-header">
+          <h3>Packing Slip</h3>
+        </div>
+        <p class="hint">Take a clear photo of the incoming packing slip. It will be scanned automatically.</p>
+        <div id="incoming-thumb" class="thumb-row"></div>
+        <label class="btn btn-secondary btn-full capture-btn">
+          Take Packing Slip Photo
+          <input type="file" accept="image/*" capture="environment" id="input-incoming" hidden>
+        </label>
+      </div>
+    </div>
+
+    <div id="incoming-scanning-status" class="scanning-status hidden">
+      <div class="spinner"></div>
+      <p>Reading job number&hellip;</p>
+    </div>
+  </section>
+
+  <!-- Incoming Inventory: confirm/edit the OCR'd job number -->
+  <section id="screen-incoming-confirm" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-back-to-incoming-capture" class="icon-btn">&#8592;</button>
+      <div class="capture-title">Confirm Job Number</div>
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <div class="capture-body">
+      <img id="confirm-thumb" class="confirm-thumb" alt="Packing slip photo">
+
+      <div id="ocr-guess-note" class="ocr-note"></div>
+
+      <label class="field-label" for="job-number-input">Job Number</label>
+      <input type="text" id="job-number-input" class="job-number-input" placeholder="Enter job number" inputmode="numeric">
+
+      <label class="field-label" for="incoming-location-select">Which warehouse is this going to?</label>
+      <select id="incoming-location-select" class="job-number-input">
+        <option value="">— Select a location —</option>
+      </select>
+
+      <button id="btn-confirm-file" class="btn btn-primary btn-huge menu-spacing">
+        Confirm &amp; File
+      </button>
+      <button id="btn-open-flag" class="btn btn-warning btn-full menu-spacing-sm">
+        Flag &mdash; No Job Number / Issue
+      </button>
+    </div>
+  </section>
+
+  <!-- Incoming Inventory: flag an issue -->
+  <section id="screen-incoming-flag" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-back-to-confirm" class="icon-btn">&#8592;</button>
+      <div class="capture-title">Flag Packing Slip</div>
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <div class="capture-body">
+      <img id="flag-thumb" class="confirm-thumb" alt="Packing slip photo">
+
+      <label class="field-label" for="flag-reason-select">Reason</label>
+      <select id="flag-reason-select" class="job-number-input">
+        <option value="Missing job number">Missing job number</option>
+        <option value="Job number illegible">Job number illegible</option>
+        <option value="Damaged / unreadable slip">Damaged / unreadable slip</option>
+        <option value="Other">Other</option>
+      </select>
+
+      <label class="field-label" for="flag-note-input">Note (optional)</label>
+      <textarea id="flag-note-input" class="job-number-input flag-note" placeholder="Any extra detail for the PM team"></textarea>
+
+      <p class="hint">This will email the PM team (PMteam@aes-energy.com) with this photo attached.</p>
+
+      <button id="btn-submit-flag" class="btn btn-warning btn-huge menu-spacing">
+        Send Flag to PM Team
+      </button>
+    </div>
+  </section>
+
+  <!-- Incoming Inventory: done confirmation -->
+  <section id="screen-incoming-done" class="screen hidden">
+    <div class="stamp-wrap">
+      <div id="incoming-done-stamp" class="stamp">FILED</div>
+    </div>
+    <p id="incoming-done-sub" class="stamp-sub"></p>
+    <button id="btn-incoming-done-home" class="btn btn-primary btn-full">Back to Home</button>
+  </section>
+
+  <!-- Scheduled Delivery: Start Delivery (triggers SMS + ETA) -->
+  <section id="screen-start-delivery" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-start-delivery-cancel" class="icon-btn">&#10005;</button>
+      <div class="capture-title">Start Delivery</div>
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <div class="capture-body">
+      <div class="photo-group">
+        <h3>Job #<span id="start-job-number"></span></h3>
+        <p class="hint">Receiver: <span id="start-receiver-name"></span></p>
+        <p class="hint">Site: <span id="start-site-address"></span></p>
+      </div>
+
+      <div id="start-delivery-result" class="hint"></div>
+    </div>
+
+    <div class="capture-footer">
+      <button id="btn-start-delivery-go" class="btn btn-primary btn-huge">
+        I'm Heading There Now
+      </button>
+      <button id="btn-start-delivery-continue" class="btn btn-accent btn-full menu-spacing hidden">
+        Continue to Ticket
+      </button>
+    </div>
+  </section>
+
+  <!-- Scheduled Delivery: view ticket, checkoff, photos, signature -->
+  <section id="screen-scheduled-ticket" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-scheduled-cancel" class="icon-btn">&#10005;</button>
+      <div class="capture-title">Scheduled Delivery</div>
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <div class="capture-body">
+      <div class="photo-group">
+        <h3>Delivery Ticket &mdash; Job #<span id="scheduled-job-number"></span></h3>
+        <img id="scheduled-ticket-image" class="confirm-thumb" alt="Delivery ticket">
+        <div id="scheduled-checkoff-items"><!-- populated by JS: per-item checkboxes, or a single overall checkbox --></div>
+      </div>
+
+      <div class="photo-group">
+        <div class="photo-group-header">
+          <span class="req-dot" data-filled="false" id="scheduled-photos-dot"></span>
+          <h3>Photos of Material (minimum 2, before leaving truck)</h3>
+        </div>
+        <div id="scheduled-photo-thumbs" class="thumb-row"></div>
+        <label class="btn btn-secondary btn-full capture-btn">
+          Take Photo
+          <input type="file" accept="image/*" capture="environment" id="input-scheduled-photo" hidden>
+        </label>
+      </div>
+
+      <div class="photo-group">
+        <h3>Receiver Signature</h3>
+        <label class="field-label" for="scheduled-signed-by-input">Signed by (name)</label>
+        <input type="text" id="scheduled-signed-by-input" class="job-number-input" placeholder="Receiver's name">
+
+        <canvas id="signature-canvas" class="signature-canvas"></canvas>
+        <button id="btn-clear-signature" class="btn btn-secondary btn-full menu-spacing-sm">Clear Signature</button>
+      </div>
+
+      <div id="scheduled-geo-status" class="hint">Getting location&hellip;</div>
+    </div>
+
+    <div class="capture-footer">
+      <p id="scheduled-complete-hint" class="complete-hint">Check off the ticket, add 2+ photos, and get a signature to complete.</p>
+      <button id="btn-scheduled-complete" class="btn btn-primary btn-huge" disabled>
+        Complete &amp; Send
+      </button>
+    </div>
+  </section>
+
+  <!-- Scheduled Delivery: done -->
+  <section id="screen-scheduled-done" class="screen hidden">
+    <div class="stamp-wrap">
+      <div class="stamp">SIGNED &amp;<br>SENT</div>
+    </div>
+    <p id="scheduled-done-sub" class="stamp-sub"></p>
+    <button id="btn-scheduled-done-home" class="btn btn-primary btn-full">Back to Home</button>
+  </section>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
