@@ -37,7 +37,7 @@ def build_report():
     ws["A2"] = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     ws["A2"].font = Font(name="Arial", italic=True, size=9, color="666666")
 
-    headers = ["Job Number", "Location", "Confirmed By", "Confirmed At", "Photo Filename", "Note"]
+    headers = ["Job Number", "PO Number", "Locations", "Pallet Count", "PM Email", "Confirmed By", "Confirmed At", "Comment"]
     header_row = 4
     for col, header in enumerate(headers, start=1):
         cell = ws.cell(row=header_row, column=col, value=header)
@@ -47,18 +47,21 @@ def build_report():
 
     row = header_row + 1
     for entry in entries:
+        locations_str = ", ".join(f"{loc['location']} ({loc['count']})" for loc in entry.get("locations", []))
         ws.cell(row=row, column=1, value=entry["job_number"]).font = BODY_FONT
-        ws.cell(row=row, column=2, value=entry["location"]).font = BODY_FONT
-        ws.cell(row=row, column=3, value=entry["confirmed_by"]).font = BODY_FONT
-        ws.cell(row=row, column=4, value=entry["confirmed_at"][:19].replace("T", " ")).font = BODY_FONT
-        ws.cell(row=row, column=5, value=entry.get("photo_filename") or "").font = BODY_FONT
-        ws.cell(row=row, column=6, value=entry.get("note") or "").font = BODY_FONT
+        ws.cell(row=row, column=2, value=entry.get("po_number") or "").font = BODY_FONT
+        ws.cell(row=row, column=3, value=locations_str).font = BODY_FONT
+        ws.cell(row=row, column=4, value=entry.get("pallet_count") or "").font = BODY_FONT
+        ws.cell(row=row, column=5, value=entry.get("pm_email") or "").font = BODY_FONT
+        ws.cell(row=row, column=6, value=entry["confirmed_by"]).font = BODY_FONT
+        ws.cell(row=row, column=7, value=entry["confirmed_at"][:19].replace("T", " ")).font = BODY_FONT
+        ws.cell(row=row, column=8, value=entry.get("comment") or "").font = BODY_FONT
         row += 1
 
     if not entries:
         ws.cell(row=row, column=1, value="(No inventory checked in yet)").font = Font(name="Arial", italic=True, color="999999")
 
-    widths = [16, 14, 18, 20, 30, 30]
+    widths = [14, 14, 30, 12, 24, 18, 20, 30]
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
@@ -66,17 +69,20 @@ def build_report():
 
     # --- Sheet 2: Summary by Location ---
     ws2 = wb.create_sheet("Summary by Location")
-    ws2["A1"] = "Items Currently Checked In, by Location"
+    ws2["A1"] = "Pallets Currently Checked In, by Location"
     ws2["A1"].font = TITLE_FONT
 
     ws2.cell(row=3, column=1, value="Location").font = HEADER_FONT
     ws2.cell(row=3, column=1).fill = HEADER_FILL
-    ws2.cell(row=3, column=2, value="Count").font = HEADER_FONT
+    ws2.cell(row=3, column=2, value="Pallet Count").font = HEADER_FONT
     ws2.cell(row=3, column=2).fill = HEADER_FILL
 
     counts = {loc: 0 for loc in inventory.LOCATIONS}
+    total_pallets = 0
     for entry in entries:
-        counts[entry["location"]] = counts.get(entry["location"], 0) + 1
+        for loc_alloc in entry.get("locations", []):
+            counts[loc_alloc["location"]] = counts.get(loc_alloc["location"], 0) + loc_alloc["count"]
+            total_pallets += loc_alloc["count"]
 
     r = 4
     for loc in inventory.LOCATIONS:
@@ -85,10 +91,10 @@ def build_report():
         r += 1
 
     ws2.cell(row=r, column=1, value="TOTAL").font = Font(name="Arial", bold=True)
-    ws2.cell(row=r, column=2, value=len(entries)).font = Font(name="Arial", bold=True)
+    ws2.cell(row=r, column=2, value=total_pallets).font = Font(name="Arial", bold=True)
 
     ws2.column_dimensions["A"].width = 18
-    ws2.column_dimensions["B"].width = 10
+    ws2.column_dimensions["B"].width = 14
 
     buf = io.BytesIO()
     wb.save(buf)

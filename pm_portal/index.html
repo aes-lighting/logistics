@@ -15,9 +15,6 @@
     <div class="login-card">
       <div class="wordmark">AES<span>LOGISTICS</span></div>
       <p class="subtitle">Project Manager Portal</p>
-      <p style="text-align: center; margin-top: 20px; font-size: 0.9em;">
-        <a href="/" style="color: #0066cc; text-decoration: none;">→ Go to Driver App</a>
-      </p>
 
       <input id="login-email" type="email" placeholder="Email" autocomplete="off">
       <input id="login-password" type="password" placeholder="Password" autocomplete="off">
@@ -32,7 +29,6 @@
       <div class="wordmark small">AES<span>LOGISTICS</span></div>
       <div class="topbar-right">
         <span id="user-display" class="user-display"></span>
-        <a href="/" style="color: #0066cc; text-decoration: none; margin-right: 15px;">Driver App</a>
         <button id="btn-logout" class="btn-link">Log Out</button>
       </div>
     </header>
@@ -166,63 +162,41 @@
     <!-- Admin Tools tab -->
     <main class="main-grid hidden" id="tab-admin">
       <section class="card">
-        <h2>Register a Driver / Warehouse User</h2>
-        <p class="hint">Sets someone up with a login before their first shift.</p>
+        <h2>Register a User</h2>
+        <p class="hint">Everyone logs in with an @aes-energy.com email and the same shared password — set that once with your team, everyone uses it.</p>
         <div class="form-grid">
           <label>Name
-            <input id="admin-reg-driver-name" type="text" placeholder="e.g. Sarah T.">
-          </label>
-          <label>PIN / Code
-            <input id="admin-reg-driver-code" type="text" placeholder="6 digits or a word">
-          </label>
-        </div>
-        <div id="admin-reg-driver-status" class="status-line"></div>
-        <button id="btn-admin-reg-driver" class="btn btn-primary">Register User</button>
-      </section>
-
-      <section class="card">
-        <h2>Register a Project Manager</h2>
-        <div class="form-grid">
-          <label>Name
-            <input id="admin-reg-pm-name" type="text" placeholder="e.g. Julia PM">
+            <input id="admin-reg-name" type="text" placeholder="e.g. Sarah T.">
           </label>
           <label>Email
-            <input id="admin-reg-pm-email" type="email" placeholder="julia@aes-energy.com">
+            <input id="admin-reg-email" type="email" placeholder="sarah@aes-energy.com">
           </label>
-          <label>Initial Password
-            <input id="admin-reg-pm-password" type="text" placeholder="At least 4 characters">
-          </label>
-        </div>
-        <div id="admin-reg-pm-status" class="status-line"></div>
-        <button id="btn-admin-reg-pm" class="btn btn-primary">Register PM</button>
-      </section>
-
-      <section class="card">
-        <h2>Reset a Driver's Code</h2>
-        <div class="form-grid">
-          <label>Driver Name (exact)
-            <input id="admin-reset-name" type="text" placeholder="e.g. Mike R.">
-          </label>
-          <label>New Code
-            <input id="admin-reset-code" type="text" placeholder="6 digits or a word">
+          <label>Role
+            <select id="admin-reg-role">
+              <option value="driver">Driver / Warehouse</option>
+              <option value="pm">Project Manager</option>
+              <option value="admin">Admin</option>
+            </select>
           </label>
         </div>
-        <div id="admin-reset-status" class="status-line"></div>
-        <button id="btn-admin-reset" class="btn btn-primary">Reset Code</button>
+        <div id="admin-reg-status" class="status-line"></div>
+        <button id="btn-admin-reg" class="btn btn-primary">Register User</button>
       </section>
 
       <section class="card card-wide">
         <h2>Registered Users</h2>
-        <div class="row" style="gap: 40px; align-items: flex-start;">
-          <div style="flex:1">
-            <h3 class="hint">Drivers / Warehouse</h3>
-            <div id="admin-driver-list" class="list">Loading…</div>
-          </div>
-          <div style="flex:1">
-            <h3 class="hint">Project Managers</h3>
-            <div id="admin-pm-list" class="list">Loading…</div>
-          </div>
-        </div>
+        <table class="deliveries-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Role</th>
+            </tr>
+          </thead>
+          <tbody id="admin-user-list">
+            <tr><td colspan="3">Loading&hellip;</td></tr>
+          </tbody>
+        </table>
       </section>
     </main>
   </section>
@@ -241,10 +215,10 @@
     </div>
   </div>
 
-  <!-- Generate ticket modal -->
+  <!-- Generate / Revise ticket modal (shared — title and button text swap based on mode) -->
   <div id="generate-modal" class="modal hidden">
     <div class="modal-box modal-wide">
-      <h3>Generate Delivery Ticket</h3>
+      <h3 id="generate-modal-title">Generate Delivery Ticket</h3>
       <p class="hint">Job #<span id="generate-modal-job"></span> &mdash; add the materials for this delivery.</p>
       <div id="generate-line-items"></div>
       <button id="btn-generate-add-row" class="btn btn-secondary">+ Add Item</button>
@@ -252,6 +226,22 @@
       <div class="modal-actions">
         <button id="btn-generate-cancel" class="btn btn-secondary">Cancel</button>
         <button id="btn-generate-submit" class="btn btn-primary">Generate Ticket</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Send to PM modal -->
+  <div id="send-pm-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>Send Ticket to PM</h3>
+      <p class="hint">Job #<span id="send-pm-modal-job"></span> &mdash; send a copy to any PM, regardless of who's assigned.</p>
+      <select id="send-pm-select" class="job-number-input">
+        <option value="">— Select a PM —</option>
+      </select>
+      <div id="send-pm-status" class="status-line"></div>
+      <div class="modal-actions">
+        <button id="btn-send-pm-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="btn-send-pm-submit" class="btn btn-primary">Send</button>
       </div>
     </div>
   </div>

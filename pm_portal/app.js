@@ -43,27 +43,21 @@ function initLogin() {
     errorEl.classList.add("hidden");
 
     try {
-      const result = await api("/api/auth/pm_login", {
+      const result = await api("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-      currentUser = { role: "pm", email: result.email, name: result.name };
+      if (result.role !== "pm" && result.role !== "admin") {
+        errorEl.textContent = "This account doesn't have Project Management access.";
+        errorEl.classList.remove("hidden");
+        return;
+      }
+      currentUser = { role: result.role, email: result.email, name: result.name };
       showDashboard();
     } catch (e) {
-      // fall back to admin login (admins can also use this portal)
-      try {
-        const result = await api("/api/auth/admin_login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password }),
-        });
-        currentUser = { role: "admin", email: result.email };
-        showDashboard();
-      } catch (e2) {
-        errorEl.textContent = e.message;
-        errorEl.classList.remove("hidden");
-      }
+      errorEl.textContent = e.message;
+      errorEl.classList.remove("hidden");
     }
   });
 }
@@ -104,8 +98,7 @@ function switchTab(tab) {
   document.getElementById("tab-btn-inventory").classList.toggle("tab-active", tab === "inventory");
   document.getElementById("tab-btn-admin").classList.toggle("tab-active", tab === "admin");
   if (tab === "admin") {
-    loadAdminDriverList();
-    loadAdminPmList();
+    loadAdminUserList();
   }
   if (tab === "inventory") {
     loadInventory();
@@ -162,93 +155,42 @@ async function loadInventory() {
 // ---------- Admin Tools ----------
 
 function initAdminTools() {
-  document.getElementById("btn-admin-reg-driver").addEventListener("click", async () => {
-    const name = document.getElementById("admin-reg-driver-name").value.trim();
-    const code = document.getElementById("admin-reg-driver-code").value.trim();
-    const statusEl = document.getElementById("admin-reg-driver-status");
+  document.getElementById("btn-admin-reg").addEventListener("click", async () => {
+    const name = document.getElementById("admin-reg-name").value.trim();
+    const email = document.getElementById("admin-reg-email").value.trim();
+    const role = document.getElementById("admin-reg-role").value;
+    const statusEl = document.getElementById("admin-reg-status");
     try {
-      const result = await api("/api/auth/admin/register_driver", {
+      const result = await api("/api/auth/admin/register_user", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, code }),
+        body: JSON.stringify({ name, email, role }),
       });
-      statusEl.textContent = `${result.name} registered.`;
+      statusEl.textContent = `${result.name} registered as ${result.role}. They log in with that email and the shared password.`;
       statusEl.className = "status-line ok";
-      document.getElementById("admin-reg-driver-name").value = "";
-      document.getElementById("admin-reg-driver-code").value = "";
-      loadAdminDriverList();
+      document.getElementById("admin-reg-name").value = "";
+      document.getElementById("admin-reg-email").value = "";
+      document.getElementById("admin-reg-role").value = "driver";
+      loadAdminUserList();
       loadDriverDropdown();
     } catch (e) {
       statusEl.textContent = e.message;
       statusEl.className = "status-line err";
     }
   });
-
-  document.getElementById("btn-admin-reg-pm").addEventListener("click", async () => {
-    const name = document.getElementById("admin-reg-pm-name").value.trim();
-    const email = document.getElementById("admin-reg-pm-email").value.trim();
-    const password = document.getElementById("admin-reg-pm-password").value.trim();
-    const statusEl = document.getElementById("admin-reg-pm-status");
-    try {
-      const result = await api("/api/auth/admin/register_pm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password }),
-      });
-      statusEl.textContent = `${result.name} can now log in.`;
-      statusEl.className = "status-line ok";
-      document.getElementById("admin-reg-pm-name").value = "";
-      document.getElementById("admin-reg-pm-email").value = "";
-      document.getElementById("admin-reg-pm-password").value = "";
-      loadAdminPmList();
-    } catch (e) {
-      statusEl.textContent = e.message;
-      statusEl.className = "status-line err";
-    }
-  });
-
-  document.getElementById("btn-admin-reset").addEventListener("click", async () => {
-    const name = document.getElementById("admin-reset-name").value.trim();
-    const newCode = document.getElementById("admin-reset-code").value.trim();
-    const statusEl = document.getElementById("admin-reset-status");
-    try {
-      const result = await api("/api/auth/admin/reset_driver_code", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, new_code: newCode }),
-      });
-      statusEl.textContent = `${result.name}'s code has been reset.`;
-      statusEl.className = "status-line ok";
-      document.getElementById("admin-reset-name").value = "";
-      document.getElementById("admin-reset-code").value = "";
-    } catch (e) {
-      statusEl.textContent = e.message;
-      statusEl.className = "status-line err";
-    }
-  });
 }
 
-async function loadAdminDriverList() {
-  const listEl = document.getElementById("admin-driver-list");
-  try {
-    const result = await api("/api/auth/admin/drivers");
-    listEl.innerHTML = result.drivers.length
-      ? result.drivers.map((d) => `<div class="list-item">${d.name}</div>`).join("")
-      : '<div class="hint">No drivers registered yet.</div>';
-  } catch (e) {
-    listEl.innerHTML = `<div class="hint">Couldn't load: ${e.message}</div>`;
-  }
-}
+const ROLE_LABELS = { driver: "Driver / Warehouse", pm: "Project Manager", admin: "Admin" };
 
-async function loadAdminPmList() {
-  const listEl = document.getElementById("admin-pm-list");
+async function loadAdminUserList() {
+  const tbody = document.getElementById("admin-user-list");
   try {
-    const result = await api("/api/auth/admin/pms");
-    listEl.innerHTML = result.pms.length
-      ? result.pms.map((p) => `<div class="list-item">${p.name} (${p.email})</div>`).join("")
-      : '<div class="hint">No PMs registered yet.</div>';
+    const result = await api("/api/auth/admin/users");
+    tbody.innerHTML = result.users.length
+      ? result.users.map((u) => `<tr><td>${u.name}</td><td>${u.email}</td><td>${ROLE_LABELS[u.role] || u.role}</td></tr>`).join("")
+      : '<tr><td colspan="3" class="hint">No users registered yet.</td></tr>';
   } catch (e) {
-    listEl.innerHTML = `<div class="hint">Couldn't load: ${e.message}</div>`;
+    tbody.innerHTML = `<tr><td colspan="3" class="hint">Couldn't load: ${e.message}</td></tr>`;
   }
 }
 
@@ -402,7 +344,7 @@ async function loadDeliveries() {
         <td>${d.delivery_date}</td>
         <td>${d.receiver_name}</td>
         <td>${d.assigned_driver || '<span class="hint">Unassigned</span>'}</td>
-        <td><span class="status-badge status-${d.status}">${d.status.replace("_", " ")}</span></td>
+        <td><span class="status-badge status-${d.status}">${d.status.replace("_", " ")}</span>${d.revision_count ? ` <span class="hint">(rev. ${d.revision_count})</span>` : ""}</td>
         <td>${d.ticket_filename ? "Uploaded" : "—"}</td>
         <td></td>
       `;
@@ -424,9 +366,29 @@ async function loadDeliveries() {
         const btn = document.createElement("button");
         btn.className = "btn btn-secondary";
         btn.textContent = "View";
+        btn.style.marginRight = "6px";
         btn.addEventListener("click", () => openViewModal(d));
         actionCell.appendChild(btn);
+
+        // Revising is always allowed, at any stage — packing/en-route/completed
+        // deliveries just get handled with extra care server-side (see the
+        // reset_to_pack / stage-aware alert logic).
+        const reviseBtn = document.createElement("button");
+        reviseBtn.className = "btn btn-secondary";
+        reviseBtn.textContent = "Revise";
+        reviseBtn.style.marginRight = "6px";
+        reviseBtn.addEventListener("click", () => openReviseModal(d));
+        actionCell.appendChild(reviseBtn);
       }
+
+      if (d.ticket_filename) {
+        const sendBtn = document.createElement("button");
+        sendBtn.className = "btn btn-secondary";
+        sendBtn.textContent = "Send to PM";
+        sendBtn.addEventListener("click", () => openSendToPmModal(d));
+        actionCell.appendChild(sendBtn);
+      }
+
       tbody.appendChild(tr);
     });
   } catch (e) {
@@ -472,9 +434,10 @@ function initUploadModal() {
   });
 }
 
-// ---------- Generate ticket modal ----------
+// ---------- Generate / Revise ticket modal ----------
 
 let generateTargetId = null;
+let generateMode = "generate"; // "generate" or "revise"
 let lineItemRowCount = 0;
 
 function addLineItemRow(item = {}) {
@@ -502,10 +465,26 @@ function addLineItemRow(item = {}) {
 
 function openGenerateModal(delivery) {
   generateTargetId = delivery.id;
+  generateMode = "generate";
+  document.getElementById("generate-modal-title").textContent = "Generate Delivery Ticket";
+  document.getElementById("btn-generate-submit").textContent = "Generate Ticket";
   document.getElementById("generate-modal-job").textContent = delivery.job_number;
   document.getElementById("generate-line-items").innerHTML = "";
   document.getElementById("generate-modal-status").textContent = "";
   addLineItemRow();
+  document.getElementById("generate-modal").classList.remove("hidden");
+}
+
+function openReviseModal(delivery) {
+  generateTargetId = delivery.id;
+  generateMode = "revise";
+  document.getElementById("generate-modal-title").textContent = "Revise Delivery Ticket";
+  document.getElementById("btn-generate-submit").textContent = "Save Revision & Notify";
+  document.getElementById("generate-modal-job").textContent = delivery.job_number;
+  document.getElementById("generate-line-items").innerHTML = "";
+  document.getElementById("generate-modal-status").textContent = "";
+  const items = delivery.line_items && delivery.line_items.length ? delivery.line_items : [{}];
+  items.forEach((item) => addLineItemRow(item));
   document.getElementById("generate-modal").classList.remove("hidden");
 }
 
@@ -536,14 +515,78 @@ function initGenerateModal() {
       return;
     }
 
+    const endpoint = generateMode === "revise" ? "revise_ticket" : "generate_ticket";
     try {
-      await api(`/api/schedule/${generateTargetId}/generate_ticket`, {
+      const result = await api(`/api/schedule/${generateTargetId}/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ line_items: lineItems }),
       });
       document.getElementById("generate-modal").classList.add("hidden");
+      if (generateMode === "revise" && result.reset_to_pack) {
+        alert("This delivery had already been packed. Since the checked-off items no longer match, it has been reset and needs to be re-packed and re-verified before a driver can take it. The PM and warehouse have both been notified.");
+      }
       await loadDeliveries();
+    } catch (e) {
+      statusEl.textContent = e.message;
+      statusEl.className = "status-line err";
+    }
+  });
+}
+
+// ---------- Send to PM modal ----------
+
+let sendPmTargetId = null;
+
+async function openSendToPmModal(delivery) {
+  sendPmTargetId = delivery.id;
+  document.getElementById("send-pm-modal-job").textContent = delivery.job_number;
+  document.getElementById("send-pm-status").textContent = "";
+
+  const select = document.getElementById("send-pm-select");
+  select.innerHTML = '<option value="">— Select a PM —</option>';
+  try {
+    const result = await api("/api/inventory/pms");
+    result.pms.forEach((pm) => {
+      const opt = document.createElement("option");
+      opt.value = pm.email;
+      opt.textContent = `${pm.name} (${pm.email})`;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    console.warn("Couldn't load PM list", e);
+  }
+
+  document.getElementById("send-pm-modal").classList.remove("hidden");
+}
+
+function initSendToPmModal() {
+  document.getElementById("btn-send-pm-cancel").addEventListener("click", () => {
+    document.getElementById("send-pm-modal").classList.add("hidden");
+  });
+
+  document.getElementById("btn-send-pm-submit").addEventListener("click", async () => {
+    const pmEmail = document.getElementById("send-pm-select").value;
+    const statusEl = document.getElementById("send-pm-status");
+    if (!pmEmail) {
+      statusEl.textContent = "Select a PM first.";
+      statusEl.className = "status-line err";
+      return;
+    }
+    try {
+      const result = await api(`/api/schedule/${sendPmTargetId}/send_to_pm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pm_email: pmEmail }),
+      });
+      if (result.sent) {
+        statusEl.textContent = "Sent.";
+        statusEl.className = "status-line ok";
+        setTimeout(() => document.getElementById("send-pm-modal").classList.add("hidden"), 800);
+      } else {
+        statusEl.textContent = result.error || "Couldn't send — check email settings.";
+        statusEl.className = "status-line err";
+      }
     } catch (e) {
       statusEl.textContent = e.message;
       statusEl.className = "status-line err";
@@ -601,6 +644,7 @@ initLogin();
 initDashboard();
 initUploadModal();
 initGenerateModal();
+initSendToPmModal();
 initAdminTools();
 initInventoryTab();
 initViewModal();

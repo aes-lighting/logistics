@@ -2,6 +2,9 @@
   "_job_number_pattern_note": "PLACEHOLDER - tune against real packing slip photos. Uses a named group (?P<job>...).",
   "job_number_pattern": "job\\s*#?\\s*:?\\s*(?P<job>\\d{3,8})",
 
+  "_po_number_pattern_note": "PLACEHOLDER - tune against real packing slips. Uses a named group (?P<po>...).",
+  "po_number_pattern": "p\\.?\\s*o\\.?\\s*#?\\s*:?\\s*(?P<po>[A-Za-z0-9\\-]{3,20})",
+
   "incoming_dir": "./incoming",
   "dest_dir": "./organized",
   "review_folder": "needs_review_no_job_number",

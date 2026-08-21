@@ -14,9 +14,7 @@ let currentUser = null; // { role: "driver", name } or { role: "admin", email } 
 let currentAppMode = null; // "warehouse" or "drivers" - which half of the driver-role app is showing
 
 const ME_URL = "/api/auth/me";
-const DRIVER_LOGIN_URL = "/api/auth/driver_login";
-const ADMIN_LOGIN_URL = "/api/auth/admin_login";
-const PM_LOGIN_URL = "/api/auth/pm_login";
+const LOGIN_URL = "/api/auth/login";
 const LOGOUT_URL = "/api/auth/logout";
 
 // ---------- IndexedDB helpers ----------
@@ -102,24 +100,24 @@ function getCachedUser() {
 // ---------- Login ----------
 
 function initLoginScreen() {
-  document.getElementById("btn-login-driver").addEventListener("click", async () => {
-    const name = document.getElementById("login-name-input").value.trim();
-    const code = document.getElementById("login-code-input").value.trim();
+  document.getElementById("btn-login").addEventListener("click", async () => {
+    const email = document.getElementById("login-email-input").value.trim();
+    const password = document.getElementById("login-password-input").value;
     const errorEl = document.getElementById("login-error");
     errorEl.classList.add("hidden");
 
-    if (!name || !code) {
-      errorEl.textContent = "Enter your name and a code.";
+    if (!email || !password) {
+      errorEl.textContent = "Enter your email and password.";
       errorEl.classList.remove("hidden");
       return;
     }
 
     try {
-      const resp = await fetch(DRIVER_LOGIN_URL, {
+      const resp = await fetch(LOGIN_URL, {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, code }),
+        body: JSON.stringify({ email, password }),
       });
       const result = await resp.json();
       if (!resp.ok) {
@@ -127,63 +125,14 @@ function initLoginScreen() {
         errorEl.classList.remove("hidden");
         return;
       }
-      cacheUser({ role: "driver", name: result.name });
+      cacheUser({ role: result.role, name: result.name, email: result.email });
       showRoleMenu();
     } catch (e) {
-      console.error("Driver login failed", e);
+      console.error("Login failed", e);
       errorEl.textContent = "Couldn't reach the server. Check your signal and try again.";
       errorEl.classList.remove("hidden");
     }
   });
-
-  document.getElementById("btn-goto-admin-login").addEventListener("click", () => show("screen-admin-login"));
-}
-
-function initAdminLoginScreen() {
-  document.getElementById("btn-login-admin").addEventListener("click", async () => {
-    const email = document.getElementById("admin-login-email-input").value.trim();
-    const password = document.getElementById("admin-login-password-input").value;
-    const errorEl = document.getElementById("admin-login-error");
-    errorEl.classList.add("hidden");
-
-    try {
-      const resp = await fetch(ADMIN_LOGIN_URL, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const result = await resp.json();
-      if (resp.ok) {
-        cacheUser({ role: "admin", email: result.email });
-        showRoleMenu();
-        return;
-      }
-
-      // Not an admin — try PM credentials before giving up.
-      const pmResp = await fetch(PM_LOGIN_URL, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const pmResult = await pmResp.json();
-      if (pmResp.ok) {
-        cacheUser({ role: "pm", email: pmResult.email, name: pmResult.name });
-        showRoleMenu();
-        return;
-      }
-
-      errorEl.textContent = result.error || "Login failed.";
-      errorEl.classList.remove("hidden");
-    } catch (e) {
-      console.error("Admin/PM login failed", e);
-      errorEl.textContent = "Couldn't reach the server. Check your signal and try again.";
-      errorEl.classList.remove("hidden");
-    }
-  });
-
-  document.getElementById("btn-goto-driver-login").addEventListener("click", () => show("screen-login"));
 }
 
 async function logout() {
@@ -194,8 +143,8 @@ async function logout() {
   }
   cacheUser(null);
   currentAppMode = null;
-  document.getElementById("login-name-input").value = "";
-  document.getElementById("login-code-input").value = "";
+  document.getElementById("login-email-input").value = "";
+  document.getElementById("login-password-input").value = "";
   show("screen-login");
 }
 
@@ -259,7 +208,6 @@ async function goHome() {
     await refreshScheduledList();
   }
   if (showWarehouse) {
-    await refreshIncomingQueue();
     await refreshPackList();
   }
   show("screen-home");
@@ -308,7 +256,6 @@ function initHomeScreen() {
   document.getElementById("btn-change-driver").addEventListener("click", logout);
   document.getElementById("btn-logout").addEventListener("click", logout);
   document.getElementById("btn-sync").addEventListener("click", syncAll);
-  document.getElementById("btn-incoming-retry").addEventListener("click", retryIncomingQueue);
   document.getElementById("btn-switch-role").addEventListener("click", showRoleMenu);
 }
 
@@ -747,220 +694,356 @@ function initCompleteScreen() {
 }
 
 // ---------- Incoming Inventory (packing slips) ----------
-// Unlike deliveries, this flow normally talks to the server immediately
-// (needs signal) so the OCR'd job number can be shown back for
-// confirmation/editing before anything is filed. If any step fails due to
-// signal, the item is saved locally with a status and shown in a retry
-// queue on Home, same idea as the delivery sync queue.
-//
-// Statuses:
-//   pending_scan    - photo taken, scan upload hasn't succeeded yet (auto-retries)
-//   scanned         - scan succeeded, waiting on a human to confirm/edit the
-//                     job number or flag it (NOT auto-retried — needs review)
-//   pending_confirm - human already chose a job number, but the confirm
-//                     request failed (auto-retries, no human input needed)
-//   pending_flag    - human already chose to flag, but the flag request
-//                     failed (auto-retries, no human input needed)
+// A multi-step flow that requires being online throughout (like Start
+// Delivery already does) — each step talks to the server immediately:
+// scan page(s) -> confirm job/PO (auto-emails that job's PM) -> pallet
+// count + one photo per pallet -> choose location(s), optionally split
+// across several -> comment -> finalize (logs it and generates a
+// printable QR code). There is no offline retry queue for this flow.
 
-const SCAN_URL = "/api/incoming/scan";
-const CONFIRM_URL = "/api/incoming/confirm";
-const FLAG_URL = "/api/incoming/flag";
+let incomingSessionId = null;
+let incomingPageFiles = []; // local blobs, for thumbnail display only
+let incomingJobGuess = null;
+let incomingPoGuess = null;
+let incomingPalletCount = 0;
+let incomingPalletPhotoCount = 0;
+let cachedLocations = null;
+let cachedPms = null;
 
 function startIncomingInventory() {
-  currentIncomingScan = null;
+  incomingSessionId = null;
+  incomingPageFiles = [];
+  incomingJobGuess = null;
+  incomingPoGuess = null;
   document.getElementById("incoming-thumb").innerHTML = "";
   document.getElementById("incoming-scanning-status").classList.add("hidden");
+  document.getElementById("btn-incoming-done-scanning").disabled = true;
   show("screen-incoming-capture");
 }
 
 function initIncomingCaptureScreen() {
-  document.getElementById("input-incoming").addEventListener("change", handleIncomingPhoto);
-  document.getElementById("btn-cancel-incoming").addEventListener("click", goHome);
+  document.getElementById("input-incoming").addEventListener("change", handleIncomingPage);
+  document.getElementById("btn-cancel-incoming").addEventListener("click", () => {
+    if (incomingPageFiles.length > 0 && !confirm("Discard this scan?")) return;
+    goHome();
+  });
+  document.getElementById("btn-incoming-done-scanning").addEventListener("click", showIncomingConfirmScreen);
 }
 
-async function handleIncomingPhoto(fileInputEvent) {
+async function handleIncomingPage(fileInputEvent) {
   const file = fileInputEvent.target.files[0];
   if (!file) return;
+  fileInputEvent.target.value = "";
 
+  incomingPageFiles.push(file);
   const thumbContainer = document.getElementById("incoming-thumb");
-  thumbContainer.innerHTML = "";
   const img = document.createElement("img");
   img.className = "thumb";
   img.src = URL.createObjectURL(file);
   thumbContainer.appendChild(img);
 
   document.getElementById("incoming-scanning-status").classList.remove("hidden");
-  fileInputEvent.target.value = "";
+  document.getElementById("incoming-capture-btn-label").textContent = "Take Photo of Next Page";
 
-  // Persist immediately so the photo is never lost even if the scan fails
-  // or the app is closed before it succeeds.
-  const record = {
-    id: uuid(),
-    status: "pending_scan",
-    photoBlob: file,
-    previewId: null,
-    jobNumberGuess: null,
-    jobNumberConfirmed: null,
-    flagReason: null,
-    flagNote: null,
-    createdAt: new Date().toISOString(),
-  };
-  await dbPut(record, INCOMING_STORE);
-
-  const ok = await attemptScan(record);
-  document.getElementById("incoming-scanning-status").classList.add("hidden");
-
-  if (ok) {
-    currentIncomingScan = record;
-    showIncomingConfirmScreen();
-  } else {
-    alert("No signal — this photo is saved and will scan automatically once you're back online. You'll find it under Incoming Inventory — Pending.");
-    goHome();
-  }
-}
-
-/** Tries the scan upload for a pending_scan record. Returns true/false, updates + saves the record either way. */
-async function attemptScan(record) {
   try {
     const formData = new FormData();
-    formData.append("photo", record.photoBlob, "slip.jpg");
-    const resp = await fetch(SCAN_URL, { method: "POST", credentials: "same-origin", body: formData });
+    formData.append("photo", file, "page.jpg");
+    if (incomingSessionId) formData.append("session_id", incomingSessionId);
+
+    const resp = await fetch("/api/incoming/scan_page", { method: "POST", credentials: "same-origin", body: formData });
     if (!resp.ok) throw new Error(`Scan failed with status ${resp.status}`);
     const result = await resp.json();
 
-    record.status = "scanned";
-    record.previewId = result.preview_id;
-    record.jobNumberGuess = result.job_number_guess;
-    await dbPut(record, INCOMING_STORE);
-    return true;
+    incomingSessionId = result.session_id;
+    if (result.job_number_guess) incomingJobGuess = result.job_number_guess;
+    if (result.po_number_guess) incomingPoGuess = result.po_number_guess;
+
+    document.getElementById("btn-incoming-done-scanning").disabled = false;
   } catch (e) {
-    console.error("Scan attempt failed", e);
-    record.status = "pending_scan";
-    await dbPut(record, INCOMING_STORE);
-    return false;
+    console.error("Scan page failed", e);
+    alert("Couldn't reach the server to scan this page. Check your signal and try again.");
+    incomingPageFiles.pop();
+    thumbContainer.removeChild(thumbContainer.lastChild);
+  } finally {
+    document.getElementById("incoming-scanning-status").classList.add("hidden");
   }
 }
 
-let cachedLocations = null;
+function showIncomingConfirmScreen() {
+  const thumbContainer = document.getElementById("confirm-thumbs");
+  thumbContainer.innerHTML = "";
+  incomingPageFiles.forEach((file) => {
+    const img = document.createElement("img");
+    img.className = "thumb";
+    img.src = URL.createObjectURL(file);
+    thumbContainer.appendChild(img);
+  });
 
-async function populateLocationSelect() {
-  const select = document.getElementById("incoming-location-select");
-  if (!cachedLocations) {
+  const note = document.getElementById("ocr-guess-note");
+  if (incomingJobGuess || incomingPoGuess) {
+    note.textContent = "Detected from the slip — please confirm both are correct.";
+    note.className = "ocr-note found";
+  } else {
+    note.textContent = "Nothing could be read automatically. Enter both manually, or flag this slip.";
+    note.className = "ocr-note not-found";
+  }
+  document.getElementById("job-number-input").value = incomingJobGuess || "";
+  document.getElementById("po-number-input").value = incomingPoGuess || "";
+  document.getElementById("pm-picker-wrap").classList.add("hidden");
+
+  show("screen-incoming-confirm");
+}
+
+async function loadPmPickerOptions() {
+  const select = document.getElementById("pm-picker-select");
+  if (!cachedPms) {
     try {
-      const resp = await fetch("/api/inventory/locations", { credentials: "same-origin" });
-      if (resp.ok) {
-        const result = await resp.json();
-        cachedLocations = result.locations;
-      }
+      const resp = await fetch("/api/inventory/pms", { credentials: "same-origin" });
+      if (resp.ok) cachedPms = (await resp.json()).pms;
     } catch (e) {
-      console.warn("Couldn't load location list (offline?) — using last known list if any.", e);
+      console.warn("Couldn't load PM list", e);
     }
   }
-  if (!cachedLocations) return; // offline on first-ever load with nothing cached yet; select stays at placeholder
-
-  select.innerHTML = '<option value="">— Select a location —</option>';
-  cachedLocations.forEach((loc) => {
+  if (!cachedPms) return;
+  select.innerHTML = '<option value="">— Select a PM —</option>';
+  cachedPms.forEach((pm) => {
     const opt = document.createElement("option");
-    opt.value = loc;
-    opt.textContent = loc;
+    opt.value = pm.email;
+    opt.textContent = `${pm.name} (${pm.email})`;
     select.appendChild(opt);
   });
 }
 
-function showIncomingConfirmScreen() {
-  const thumb = document.getElementById("confirm-thumb");
-  thumb.src = URL.createObjectURL(currentIncomingScan.photoBlob);
-
-  const note = document.getElementById("ocr-guess-note");
-  const input = document.getElementById("job-number-input");
-
-  if (currentIncomingScan.jobNumberGuess) {
-    note.textContent = `Job number detected: ${currentIncomingScan.jobNumberGuess} — please confirm it's correct.`;
-    note.className = "ocr-note found";
-    input.value = currentIncomingScan.jobNumberGuess;
-  } else {
-    note.textContent = "No job number could be read automatically. Enter it manually, or flag this slip.";
-    note.className = "ocr-note not-found";
-    input.value = "";
-  }
-
-  populateLocationSelect();
-  document.getElementById("incoming-location-select").value = currentIncomingScan.locationConfirmed || "";
-
-  show("screen-incoming-confirm");
-  input.focus();
-}
-
 function initIncomingConfirmScreen() {
-  document.getElementById("btn-back-to-incoming-capture").addEventListener("click", () => {
-    // The record stays in the queue as "scanned" — nothing is lost, it can
-    // be reopened from Home later.
-    currentIncomingScan = null;
-    goHome();
-  });
+  document.getElementById("btn-back-to-incoming-capture").addEventListener("click", () => show("screen-incoming-capture"));
 
-  document.getElementById("btn-confirm-file").addEventListener("click", async () => {
+  document.getElementById("btn-confirm-job").addEventListener("click", async () => {
     const jobNumber = document.getElementById("job-number-input").value.trim();
-    const location = document.getElementById("incoming-location-select").value;
+    const poNumber = document.getElementById("po-number-input").value.trim();
+    const pmPickerVisible = !document.getElementById("pm-picker-wrap").classList.contains("hidden");
+    const pmEmail = pmPickerVisible ? document.getElementById("pm-picker-select").value : "";
+
     if (!jobNumber) {
       alert("Enter a job number, or use Flag if this slip doesn't have one.");
       return;
     }
-    if (!location) {
-      alert("Select which warehouse/location this is going to.");
+    if (pmPickerVisible && !pmEmail) {
+      alert("Select which PM owns this job.");
       return;
     }
-    currentIncomingScan.jobNumberConfirmed = jobNumber;
-    currentIncomingScan.locationConfirmed = location;
-    currentIncomingScan.status = "pending_confirm";
-    await dbPut(currentIncomingScan, INCOMING_STORE);
 
-    const result = await attemptConfirm(currentIncomingScan);
-    if (result.ok) {
-      document.getElementById("incoming-done-stamp").textContent = "FILED";
-      document.getElementById("incoming-done-sub").textContent = `Filed to Job_${result.jobNumber} (${location}).`;
-      currentIncomingScan = null;
-      show("screen-incoming-done");
-    } else {
-      alert("No signal — saved. This will file automatically once you're back online (Incoming Inventory — Pending).");
-      currentIncomingScan = null;
-      goHome();
+    try {
+      const body = { session_id: incomingSessionId, job_number: jobNumber, po_number: poNumber, staff: getDriverName() };
+      if (pmEmail) body.pm_email = pmEmail;
+
+      const resp = await fetch("/api/incoming/confirm_job", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const result = await resp.json();
+
+      if (!resp.ok) {
+        if (result.error === "needs_pm") {
+          document.getElementById("pm-picker-wrap").classList.remove("hidden");
+          await loadPmPickerOptions();
+          return;
+        }
+        throw new Error(result.error || `Failed with status ${resp.status}`);
+      }
+
+      incomingPalletCount = 0;
+      incomingPalletPhotoCount = 0;
+      document.getElementById("pallet-count-input").value = "";
+      document.getElementById("pallet-photo-group").classList.add("hidden");
+      document.getElementById("pallet-thumbs").innerHTML = "";
+      document.getElementById("btn-pallets-continue").disabled = true;
+      show("screen-incoming-pallets");
+    } catch (e) {
+      console.error("Confirm job failed", e);
+      alert(`Couldn't confirm this job: ${e.message}. Check your signal and try again.`);
     }
   });
 
   document.getElementById("btn-open-flag").addEventListener("click", () => {
-    document.getElementById("flag-thumb").src = document.getElementById("confirm-thumb").src;
     document.getElementById("flag-reason-select").value = "Missing job number";
     document.getElementById("flag-note-input").value = "";
     show("screen-incoming-flag");
   });
 }
 
-/** Tries the confirm call for a pending_confirm record. Returns { ok, jobNumber }. Deletes record from queue on success. */
-async function attemptConfirm(record) {
+// ---------- Pallets ----------
+
+function initIncomingPalletsScreen() {
+  document.getElementById("btn-pallets-back").addEventListener("click", () => {
+    if (!confirm("Discard progress on this shipment?")) return;
+    goHome();
+  });
+
+  document.getElementById("btn-set-pallet-count").addEventListener("click", () => {
+    const count = parseInt(document.getElementById("pallet-count-input").value, 10);
+    if (!count || count < 1) {
+      alert("Enter a valid pallet count (1 or more).");
+      return;
+    }
+    incomingPalletCount = count;
+    incomingPalletPhotoCount = 0;
+    document.getElementById("pallet-thumbs").innerHTML = "";
+    document.getElementById("pallet-photo-group").classList.remove("hidden");
+    document.getElementById("pallet-progress-hint").textContent = `0 of ${count} pallets photographed.`;
+    document.getElementById("pallet-capture-btn-label").textContent = `Take Photo of Pallet 1`;
+    document.getElementById("btn-pallets-continue").disabled = true;
+  });
+
+  document.getElementById("input-pallet-photo").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+
+    try {
+      const formData = new FormData();
+      formData.append("session_id", incomingSessionId);
+      formData.append("photo", file, "pallet.jpg");
+      const resp = await fetch("/api/incoming/pallet_photo", { method: "POST", credentials: "same-origin", body: formData });
+      if (!resp.ok) throw new Error(`Failed with status ${resp.status}`);
+
+      incomingPalletPhotoCount++;
+      const img = document.createElement("img");
+      img.className = "thumb";
+      img.src = URL.createObjectURL(file);
+      document.getElementById("pallet-thumbs").appendChild(img);
+
+      const hint = document.getElementById("pallet-progress-hint");
+      if (incomingPalletPhotoCount >= incomingPalletCount) {
+        hint.textContent = `All ${incomingPalletCount} pallet(s) photographed.`;
+        document.getElementById("pallet-photo-group").classList.add("hidden");
+        document.getElementById("btn-pallets-continue").disabled = false;
+      } else {
+        hint.textContent = `${incomingPalletPhotoCount} of ${incomingPalletCount} pallets photographed.`;
+        document.getElementById("pallet-capture-btn-label").textContent = `Take Photo of Pallet ${incomingPalletPhotoCount + 1}`;
+      }
+    } catch (e) {
+      console.error("Pallet photo failed", e);
+      alert(`Couldn't upload that pallet photo: ${e.message}. Check your signal and try again.`);
+    }
+  });
+
+  document.getElementById("btn-pallets-continue").addEventListener("click", () => {
+    document.getElementById("location-rows").innerHTML = "";
+    document.getElementById("incoming-comment-input").value = "";
+    addLocationRow(true);
+    show("screen-incoming-locations");
+  });
+}
+
+// ---------- Locations + comment + finalize ----------
+
+async function ensureLocationsLoaded() {
+  if (cachedLocations) return;
   try {
-    const resp = await fetch(CONFIRM_URL, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        preview_id: record.previewId,
-        job_number: record.jobNumberConfirmed,
-        location: record.locationConfirmed,
-        staff: getDriverName(),
-      }),
-    });
-    if (!resp.ok) throw new Error(`Confirm failed with status ${resp.status}`);
-    const result = await resp.json();
-    await dbDelete(record.id, INCOMING_STORE);
-    return { ok: true, jobNumber: result.job_number };
+    const resp = await fetch("/api/inventory/locations", { credentials: "same-origin" });
+    if (resp.ok) cachedLocations = (await resp.json()).locations;
   } catch (e) {
-    console.error("Confirm attempt failed", e);
-    record.status = "pending_confirm";
-    await dbPut(record, INCOMING_STORE);
-    return { ok: false };
+    console.warn("Couldn't load locations list", e);
   }
 }
+
+async function addLocationRow(isFirst = false) {
+  await ensureLocationsLoaded();
+  const container = document.getElementById("location-rows");
+  const row = document.createElement("div");
+  row.className = "line-item-row";
+
+  const select = document.createElement("select");
+  select.className = "job-number-input location-row-select";
+  select.innerHTML = '<option value="">— Location —</option>' + (cachedLocations || []).map((l) => `<option value="${l}">${l}</option>`).join("");
+
+  const countInput = document.createElement("input");
+  countInput.type = "number";
+  countInput.min = "1";
+  countInput.className = "job-number-input qty-input location-row-count";
+  countInput.placeholder = "Count";
+  if (isFirst) countInput.value = incomingPalletCount;
+
+  row.appendChild(select);
+  row.appendChild(countInput);
+
+  if (!isFirst) {
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "line-item-remove";
+    removeBtn.textContent = "\u00d7";
+    removeBtn.addEventListener("click", () => {
+      row.remove();
+      updateLocationTotal();
+    });
+    row.appendChild(removeBtn);
+  }
+
+  select.addEventListener("change", updateLocationTotal);
+  countInput.addEventListener("input", updateLocationTotal);
+
+  container.appendChild(row);
+  updateLocationTotal();
+}
+
+function updateLocationTotal() {
+  const rows = [...document.querySelectorAll("#location-rows .line-item-row")];
+  const total = rows.reduce((sum, row) => sum + (parseInt(row.querySelector(".location-row-count").value, 10) || 0), 0);
+  const hint = document.getElementById("location-total-hint");
+  const finalizeHint = document.getElementById("finalize-hint");
+  const btn = document.getElementById("btn-finalize-incoming");
+
+  const allLocationsPicked = rows.every((row) => row.querySelector(".location-row-select").value);
+  const matches = total === incomingPalletCount && allLocationsPicked && rows.length > 0;
+
+  hint.textContent = `${total} of ${incomingPalletCount} pallets assigned to a location.`;
+  finalizeHint.textContent = matches ? "Ready to finish." : "Location counts must add up to the pallet count.";
+  btn.disabled = !matches;
+}
+
+function initIncomingLocationsScreen() {
+  document.getElementById("btn-locations-back").addEventListener("click", () => {
+    if (!confirm("Discard progress on this shipment?")) return;
+    goHome();
+  });
+
+  document.getElementById("btn-add-location-row").addEventListener("click", () => addLocationRow(false));
+
+  document.getElementById("btn-finalize-incoming").addEventListener("click", async () => {
+    const rows = [...document.querySelectorAll("#location-rows .line-item-row")];
+    const locations = rows.map((row) => ({
+      location: row.querySelector(".location-row-select").value,
+      count: parseInt(row.querySelector(".location-row-count").value, 10),
+    }));
+    const comment = document.getElementById("incoming-comment-input").value.trim();
+
+    try {
+      const resp = await fetch("/api/incoming/finalize", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: incomingSessionId, pallet_count: incomingPalletCount, locations, comment }),
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || `Failed with status ${resp.status}`);
+
+      document.getElementById("incoming-done-sub").textContent =
+        `Logged and the PM has been emailed. ${incomingPalletCount} pallet(s) recorded.`;
+      const printBtn = document.getElementById("btn-print-qr");
+      printBtn.classList.remove("hidden");
+      printBtn.onclick = () => window.open(result.qr_pdf_url, "_blank");
+
+      show("screen-incoming-done");
+    } catch (e) {
+      console.error("Finalize failed", e);
+      alert(`Couldn't finish this shipment: ${e.message}. Check your signal and try again.`);
+    }
+  });
+}
+
+// ---------- Flag ----------
 
 function initIncomingFlagScreen() {
   document.getElementById("btn-back-to-confirm").addEventListener("click", () => show("screen-incoming-confirm"));
@@ -969,136 +1052,34 @@ function initIncomingFlagScreen() {
     const reason = document.getElementById("flag-reason-select").value;
     const note = document.getElementById("flag-note-input").value.trim();
 
-    currentIncomingScan.flagReason = reason;
-    currentIncomingScan.flagNote = note;
-    currentIncomingScan.status = "pending_flag";
-    await dbPut(currentIncomingScan, INCOMING_STORE);
+    try {
+      const resp = await fetch("/api/incoming/flag", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: incomingSessionId, reason, note, staff: getDriverName() }),
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || `Failed with status ${resp.status}`);
 
-    const result = await attemptFlag(currentIncomingScan);
-    if (result.ok) {
       document.getElementById("incoming-done-stamp").textContent = "FLAGGED";
-      document.getElementById("incoming-done-sub").textContent = result.emailSent
+      document.getElementById("incoming-done-sub").textContent = result.email_sent
         ? "The PM team has been emailed about this slip."
         : "Saved, but the alert email could not be sent — let the PM team know directly.";
-      currentIncomingScan = null;
+      document.getElementById("btn-print-qr").classList.add("hidden");
       show("screen-incoming-done");
-    } else {
-      alert("No signal — saved. This will submit automatically once you're back online (Incoming Inventory — Pending).");
-      currentIncomingScan = null;
-      goHome();
+    } catch (e) {
+      console.error("Flag failed", e);
+      alert(`Couldn't submit this flag: ${e.message}. Check your signal and try again.`);
     }
   });
 }
 
-/** Tries the flag call for a pending_flag record. Returns { ok, emailSent }. Deletes record from queue on success. */
-async function attemptFlag(record) {
-  try {
-    const resp = await fetch(FLAG_URL, {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        preview_id: record.previewId,
-        reason: record.flagReason,
-        note: record.flagNote,
-        staff: getDriverName(),
-      }),
-    });
-    if (!resp.ok) throw new Error(`Flag failed with status ${resp.status}`);
-    const result = await resp.json();
-    await dbDelete(record.id, INCOMING_STORE);
-    return { ok: true, emailSent: result.email_sent };
-  } catch (e) {
-    console.error("Flag attempt failed", e);
-    record.status = "pending_flag";
-    await dbPut(record, INCOMING_STORE);
-    return { ok: false };
-  }
-}
-
 function initIncomingDoneScreen() {
-  document.getElementById("btn-incoming-done-home").addEventListener("click", goHome);
-}
-
-// ---------- Incoming Inventory: Home screen queue ----------
-
-const INCOMING_STATUS_LABELS = {
-  pending_scan: "Waiting for signal",
-  scanned: "Needs review",
-  pending_confirm: "Filing (will retry)",
-  pending_flag: "Flagging (will retry)",
-};
-
-async function refreshIncomingQueue() {
-  const all = await dbGetAll(INCOMING_STORE);
-
-  const list = document.getElementById("incoming-queue-list");
-  const countEl = document.getElementById("incoming-queue-count");
-  const retryBtn = document.getElementById("btn-incoming-retry");
-
-  countEl.textContent = all.length;
-  const hasAutoRetryable = all.some((r) => r.status === "pending_scan" || r.status === "pending_confirm" || r.status === "pending_flag");
-  retryBtn.disabled = !hasAutoRetryable;
-
-  if (all.length === 0) {
-    list.innerHTML = '<div class="queue-empty">Nothing waiting.</div>';
-    return;
-  }
-
-  list.innerHTML = "";
-  all
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    .forEach((record) => {
-      const div = document.createElement("div");
-      div.className = "queue-item";
-      const needsReview = record.status === "scanned";
-      div.innerHTML = `
-        <div>
-          <div class="queue-item-id">${record.id.slice(0, 8)}</div>
-          <div class="queue-item-meta">${INCOMING_STATUS_LABELS[record.status] || record.status}</div>
-        </div>
-        <div class="queue-item-status ${needsReview ? "status-failed" : "status-completed"}">
-          ${needsReview ? "Review" : "Pending"}
-        </div>
-      `;
-      if (needsReview) {
-        div.style.cursor = "pointer";
-        div.addEventListener("click", () => {
-          currentIncomingScan = record;
-          showIncomingConfirmScreen();
-        });
-      }
-      list.appendChild(div);
-    });
-}
-
-async function retryIncomingQueue() {
-  const statusEl = document.getElementById("incoming-retry-status");
-  const all = await dbGetAll(INCOMING_STORE);
-  const retryable = all.filter((r) => r.status === "pending_scan" || r.status === "pending_confirm" || r.status === "pending_flag");
-
-  if (retryable.length === 0) return;
-
-  let succeeded = 0;
-  let stillFailing = 0;
-
-  for (const record of retryable) {
-    statusEl.textContent = `Retrying ${succeeded + stillFailing + 1} of ${retryable.length}...`;
-
-    if (record.status === "pending_scan") {
-      const ok = await attemptScan(record);
-      if (ok) succeeded++; else stillFailing++;
-    } else if (record.status === "pending_confirm") {
-      const result = await attemptConfirm(record);
-      if (result.ok) succeeded++; else stillFailing++;
-    } else if (record.status === "pending_flag") {
-      const result = await attemptFlag(record);
-      if (result.ok) succeeded++; else stillFailing++;
-    }
-  }
-
-  statusEl.textContent = `${succeeded} of ${retryable.length} went through${stillFailing ? `, ${stillFailing} still waiting for signal` : ""}.`;
-  await refreshIncomingQueue();
+  document.getElementById("btn-incoming-done-home").addEventListener("click", () => {
+    document.getElementById("incoming-done-stamp").textContent = "LOGGED";
+    goHome();
+  });
 }
 
 // ---------- Outgoing Inventory (Warehouse packing/checkoff/signature) ----------
@@ -1125,16 +1106,19 @@ async function refreshPackList() {
     listEl.innerHTML = "";
     deliveries.forEach((d) => {
       const div = document.createElement("div");
-      div.className = "queue-item";
-      div.style.cursor = "pointer";
+      div.className = "pack-list-item";
       div.innerHTML = `
-        <div>
-          <div class="queue-item-id">Job #${d.job_number} &mdash; ${d.delivery_date}</div>
-          <div class="queue-item-meta">${d.receiver_name}</div>
+        <div class="queue-item-id">Job #${d.job_number} &mdash; ${d.delivery_date}${d.revision_count ? ` <span class="hint-inline">(rev. ${d.revision_count})</span>` : ""}</div>
+        <div class="queue-item-meta">${d.receiver_name}</div>
+        <div class="pack-list-actions">
+          <button class="btn btn-secondary btn-compact revise-btn">Revise Ticket</button>
+          <button class="btn btn-secondary btn-compact sendpm-btn">Send to PM</button>
+          <button class="btn btn-primary btn-compact pack-btn">Pack / Check Inventory</button>
         </div>
-        <div class="queue-item-status status-completed">Pack</div>
       `;
-      div.addEventListener("click", () => openPackScreen(d));
+      div.querySelector(".revise-btn").addEventListener("click", () => openReviseScreen(d));
+      div.querySelector(".sendpm-btn").addEventListener("click", () => openSendToPmScreen(d));
+      div.querySelector(".pack-btn").addEventListener("click", () => openPackScreen(d));
       listEl.appendChild(div);
     });
   } catch (e) {
@@ -1142,6 +1126,151 @@ async function refreshPackList() {
     listEl.innerHTML = '<div class="queue-empty">Couldn\'t load — check your signal.</div>';
     countEl.textContent = "0";
   }
+}
+
+// ---------- Revise Ticket ----------
+
+let reviseTargetId = null;
+let reviseLineItemRowCount = 0;
+
+function addReviseLineItemRow(item = {}) {
+  const container = document.getElementById("revise-line-items");
+  const row = document.createElement("div");
+  row.className = "line-item-card";
+  row.id = `revise-item-${reviseLineItemRowCount++}`;
+  row.innerHTML = `
+    <div class="desc-row">
+      <input type="text" class="desc-input" placeholder="Material / description" value="${item.description || ""}">
+      <button type="button" class="line-item-remove">&times;</button>
+    </div>
+    <div class="line-item-grid">
+      <label>Type<input type="text" class="type-input" value="${item.type || ""}"></label>
+      <label>Qty<input type="text" class="qty-input" value="${item.quantity || ""}"></label>
+      <label>Boxes<input type="text" class="boxes-input" value="${item.boxes || ""}"></label>
+      <label>Model #<input type="text" class="model-input" value="${item.model_number || ""}"></label>
+      <label>MFG<input type="text" class="mfg-input" value="${item.mfg || ""}"></label>
+    </div>
+  `;
+  row.querySelector(".line-item-remove").addEventListener("click", () => row.remove());
+  container.appendChild(row);
+}
+
+function openReviseScreen(delivery) {
+  reviseTargetId = delivery.id;
+  document.getElementById("revise-job-number").textContent = delivery.job_number;
+  document.getElementById("revise-line-items").innerHTML = "";
+  document.getElementById("revise-status").textContent = "";
+  const items = delivery.line_items && delivery.line_items.length ? delivery.line_items : [{}];
+  items.forEach((item) => addReviseLineItemRow(item));
+  show("screen-revise-ticket");
+}
+
+function initReviseScreen() {
+  document.getElementById("btn-revise-back").addEventListener("click", goHome);
+  document.getElementById("btn-revise-add-row").addEventListener("click", () => addReviseLineItemRow());
+
+  document.getElementById("btn-revise-submit").addEventListener("click", async () => {
+    const statusEl = document.getElementById("revise-status");
+    const cards = [...document.querySelectorAll("#revise-line-items .line-item-card")];
+    const lineItems = cards
+      .map((card) => ({
+        description: card.querySelector(".desc-input").value.trim(),
+        quantity: card.querySelector(".qty-input").value.trim(),
+        type: card.querySelector(".type-input").value.trim(),
+        boxes: card.querySelector(".boxes-input").value.trim(),
+        model_number: card.querySelector(".model-input").value.trim(),
+        mfg: card.querySelector(".mfg-input").value.trim(),
+      }))
+      .filter((item) => item.description);
+
+    if (lineItems.length === 0) {
+      statusEl.textContent = "Add at least one item.";
+      statusEl.className = "status-line-driver err";
+      return;
+    }
+
+    try {
+      const resp = await fetch(`/api/schedule/${reviseTargetId}/revise_ticket`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ line_items: lineItems }),
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || `Failed with status ${resp.status}`);
+
+      statusEl.textContent = result.reset_to_pack
+        ? "Saved — this was already packed, so it's back in Ready to Pack for re-verification. PM and warehouse notified."
+        : "Saved — the PM and warehouse team have been notified.";
+      statusEl.className = "status-line-driver ok";
+      setTimeout(goHome, result.reset_to_pack ? 1600 : 900);
+    } catch (e) {
+      console.error("Revise ticket failed", e);
+      statusEl.textContent = `Couldn't save: ${e.message}`;
+      statusEl.className = "status-line-driver err";
+    }
+  });
+}
+
+// ---------- Send to PM ----------
+
+let sendPmTargetId = null;
+
+async function openSendToPmScreen(delivery) {
+  sendPmTargetId = delivery.id;
+  document.getElementById("sendpm-job-number").textContent = delivery.job_number;
+  document.getElementById("sendpm-status").textContent = "";
+
+  const select = document.getElementById("sendpm-select");
+  select.innerHTML = '<option value="">— Select a PM —</option>';
+  try {
+    const resp = await fetch("/api/inventory/pms", { credentials: "same-origin" });
+    if (resp.ok) {
+      const result = await resp.json();
+      result.pms.forEach((pm) => {
+        const opt = document.createElement("option");
+        opt.value = pm.email;
+        opt.textContent = `${pm.name} (${pm.email})`;
+        select.appendChild(opt);
+      });
+    }
+  } catch (e) {
+    console.warn("Couldn't load PM list", e);
+  }
+
+  show("screen-send-to-pm");
+}
+
+function initSendToPmScreen() {
+  document.getElementById("btn-sendpm-back").addEventListener("click", goHome);
+
+  document.getElementById("btn-sendpm-submit").addEventListener("click", async () => {
+    const pmEmail = document.getElementById("sendpm-select").value;
+    const statusEl = document.getElementById("sendpm-status");
+    if (!pmEmail) {
+      statusEl.textContent = "Select a PM first.";
+      statusEl.className = "status-line-driver err";
+      return;
+    }
+    try {
+      const resp = await fetch(`/api/schedule/${sendPmTargetId}/send_to_pm`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pm_email: pmEmail }),
+      });
+      const result = await resp.json();
+      if (!resp.ok || !result.sent) throw new Error(result.error || "Send failed");
+
+      statusEl.textContent = "Sent.";
+      statusEl.className = "status-line-driver ok";
+      setTimeout(goHome, 800);
+    } catch (e) {
+      console.error("Send to PM failed", e);
+      statusEl.textContent = `Couldn't send: ${e.message}`;
+      statusEl.className = "status-line-driver err";
+    }
+  });
 }
 
 function openPackScreen(delivery) {
@@ -1376,12 +1505,13 @@ async function uploadDelivery(delivery) {
 async function boot() {
   db = await openDB();
   initLoginScreen();
-  initAdminLoginScreen();
   initHomeScreen();
   initCaptureScreen();
   initCompleteScreen();
   initIncomingCaptureScreen();
   initIncomingConfirmScreen();
+  initIncomingPalletsScreen();
+  initIncomingLocationsScreen();
   initIncomingFlagScreen();
   initIncomingDoneScreen();
   initScheduledTicketScreen();
@@ -1390,6 +1520,8 @@ async function boot() {
   initRoleMenu();
   initPackScreen();
   initPackDoneScreen();
+  initReviseScreen();
+  initSendToPmScreen();
 
   try {
     const resp = await fetch(ME_URL, { credentials: "same-origin" });

@@ -142,6 +142,8 @@ def create_delivery(job_number, delivery_date, receiver_name, receiver_email, pm
         "packed_signature_filename": None,
         "packed_at": None,
         "line_item_checks": [],  # warehouse "LOADED" checkoff, one bool per line item
+        "revision_count": 0,
+        "last_revised_at": None,
         "started_at": None,
         "eta": None,
         "completed_at": None,
@@ -307,6 +309,66 @@ def save_generated_ticket(delivery_id, image_bytes, line_items, pm_name=""):
     store["deliveries"][delivery_id]["status"] = "ticket_uploaded"
     _save_store(store)
     return store["deliveries"][delivery_id]
+
+
+def revise_ticket(delivery_id, image_bytes, line_items, header_fields=None):
+    """
+    Regenerates an existing ticket with updated line items/header fields.
+    Always allowed, at any stage — instead of blocking, the record reacts
+    sensibly to how far along the delivery already is:
+
+      - scheduled / ticket_uploaded: just updates the ticket, nothing else
+        to reconcile yet.
+      - packed (driver hasn't started): the old LOADED checkoff no longer
+        matches the new line items, so this resets the delivery back to
+        "ticket_uploaded" — it reappears in Ready to Pack for a fresh
+        checkoff and signature before any driver can take it.
+      - en_route / completed: the driver is already underway or already
+        finished, so status is left untouched (yanking it back mid-route
+        or un-completing a finished job would cause more harm than good).
+        The ticket/line items still update; it's on the humans involved to
+        coordinate given the caller always sends an alert either way.
+
+    Bumps revision_count and returns (record, reset_to_pack: bool) so the
+    caller knows whether to mention the reset in the alert email. Returns
+    (None, False) only if delivery_id itself doesn't exist.
+    """
+    store = _load_store()
+    if delivery_id not in store["deliveries"]:
+        return None, False
+    record = store["deliveries"][delivery_id]
+
+    delivery_dir = os.path.join(FILES_DIR, delivery_id)
+    os.makedirs(delivery_dir, exist_ok=True)
+    filename = "ticket_generated.png"
+    with open(os.path.join(delivery_dir, filename), "wb") as f:
+        f.write(image_bytes)
+
+    reset_to_pack = False
+    if record["status"] == "packed":
+        record["status"] = "ticket_uploaded"
+        record["packed_confirmed"] = False
+        record["packed_by"] = None
+        record["packed_signature_filename"] = None
+        record["packed_at"] = None
+        record["line_item_checks"] = []
+        reset_to_pack = True
+    elif record["status"] == "ticket_uploaded":
+        pass  # nothing packed yet, nothing to reconcile
+    # en_route / completed: status intentionally left untouched
+
+    record["ticket_filename"] = filename
+    record["ticket_source"] = "generated"
+    record["line_items"] = line_items
+    record["revision_count"] = record.get("revision_count", 0) + 1
+    record["last_revised_at"] = datetime.now().isoformat()
+
+    for key, value in (header_fields or {}).items():
+        if key in record:
+            record[key] = value
+
+    _save_store(store)
+    return record, reset_to_pack
 
 
 def ticket_file_path(delivery_id):

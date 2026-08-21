@@ -174,6 +174,39 @@ container layout — but running `docker compose up -d --build` for the first
 time is genuinely the first real test of it. If it fails, send me the error
 output and I'll fix it.
 
+## 4b. One-click launcher (easiest way to test)
+
+Included in this zip: `start.sh` and `AES_Logistics_Launcher.bat`. Together
+they handle everything — Python setup, dependencies, `.env` creation, server
+startup, and a public HTTPS link — so testing is just "double-click and
+read the URL," no typing commands each time.
+
+**One-time setup:**
+1. Unzip this project into your WSL home folder, e.g. `~/aes_logistics_latest`
+   (if you use a different folder name, edit that path inside
+   `AES_Logistics_Launcher.bat` in Notepad first).
+2. Copy `AES_Logistics_Launcher.bat` to your Windows Desktop (or anywhere
+   convenient) — it can live outside the project folder.
+
+**Every time you want to test:**
+1. Double-click `AES_Logistics_Launcher.bat`.
+2. A window opens and does its thing. **First run only**, it'll stop partway
+   and tell you to edit `server/.env` with your admin email/password — do
+   that, save, and double-click the launcher again.
+3. Once running, look for a line like:
+   ```
+   https://random-words-here.trycloudflare.com
+   ```
+   That's your link — open it on your phone, or send it to anyone else
+   testing. Add `/pm` to the end for the Project Management portal.
+4. **Keep the window open** while testing — closing it stops the server.
+   Closing and reopening later gives you a **new** URL each time (the free
+   tunnel doesn't keep the same address between runs).
+
+This uses [Cloudflare Tunnel](https://github.com/cloudflare/cloudflared) —
+no account or signup needed, `start.sh` downloads it automatically the
+first time it runs.
+
 ## 5. Get it onto driver phones
 
 1. Once the server is live at your HTTPS domain (e.g. `https://delivery.yourcompany.com`),
@@ -194,7 +227,7 @@ No app store, no install file, no IT push needed for a small fleet.
    - **Warehouse** — Incoming Inventory (packing slips coming in) and
      Outgoing Inventory (packing/checking off/signing tickets going out).
    - **Project Management** — opens the PM Portal (`/pm`).
-   - **Driver-type accounts** (self-service PIN) see Driver + Warehouse —
+   - **Driver-type accounts** see Driver + Warehouse —
      the same person can do either job, switching anytime via the ⟲ icon on
      the home screen without logging out.
    - **PM and admin accounts** see all three tiles, since PM is meant to
@@ -233,59 +266,53 @@ For each synced ad-hoc delivery:
 
 ## 8. Login
 
-The app requires logging in before anything else is usable. Two kinds of accounts:
+One unified login for everyone — an `@aes-energy.com` email and a single
+shared password. No more separate driver PINs, no more separate admin/PM
+login screens. The same login form works on the driver app and the PM
+Portal, and works identically for a driver, a warehouse worker, a project
+manager, or an admin — what's different is only which **role** is attached
+to that email, which decides what shows up after logging in.
 
-**Driver / warehouse staff — self-service, no setup needed.** The first
-time someone types a name and a code together, that code becomes theirs
-from then on — nothing to pre-register. The code can be a 6-digit PIN, a
-word, whatever they'll remember (minimum 4 characters). Get the name wrong
-and it'll try to register a *new* account under that spelling, so encourage
-people to use a consistent name (e.g. "Mike R." every time, not sometimes
-"Mike" and sometimes "M. Rodriguez").
+**⚠️ Security note, worth actually reading:** every account shares the
+*same* password. That means anyone who knows it can log in as anyone
+else — including as an admin. This is a deliberate simplification to make
+testing painless, not something to carry into real production use without
+tightening (per-user passwords, or a real SSO provider, before this
+matters for real). I implemented exactly what was asked and hashed it at
+rest regardless, but wanted that trade-off stated plainly rather than
+quietly built in.
 
-**Admin — one fixed account.** Credentials come from `server/.env`
-(`ADMIN_EMAIL` / `ADMIN_PASSWORD`), never from `server_config.json` and
-never hardcoded in the source. On every server start, if those two env vars
-are set, the admin account is (re)synced to match them — so **changing the
-admin password later is just: edit `.env`, restart the server.**
-
-### Setting up the admin account for this pilot
+### Setting it up
 
 ```bash
 cd server
 cp .env.example .env
 # then edit .env and set:
-#   ADMIN_EMAIL=Wkennedy@aes-energy.com
-#   ADMIN_PASSWORD=<a real password>
+#   ADMIN_EMAIL=admin@aes-energy.com     (or whichever email should start as admin)
+#   SHARED_PASSWORD=aes                   (or whatever you want everyone to use)
 ```
 
-**Important:** the password you gave me in our conversation
-(`AESgreen123!`) has now been typed in plaintext into a chat log, which
-means I'd treat it as already exposed rather than truly secret. I've wired
-the system to work with it for initial testing, but I'd strongly recommend
-logging in once to confirm everything works, then changing it to something
-new via the `.env` + restart process above before this goes anywhere near
-real use. The password is never stored in plaintext on the server itself —
-it's hashed the moment the server starts — but the copy that lived in this
-chat is out of your control once typed.
+On first startup, that `ADMIN_EMAIL` is automatically registered with the
+admin role — that's your way in to start registering everyone else. Nobody
+else can self-register anymore; every account (driver, warehouse, PM,
+admin) has to be added first via Admin Tools.
 
-### Where user management lives now
+**Changing the shared password later** is just: edit `SHARED_PASSWORD` in
+`.env`, restart the server — it takes effect for every account at once.
 
-**Admin Tools moved into the PM Portal** (`/pm` → Admin Tools tab), since PM
-accounts now have full access to everything and it made more sense as a
-desk-oriented management page than a phone-app screen. Both admin and PM
-logins can:
-- **Register a driver/warehouse user** — set up a name + PIN/code before
-  their first shift.
-- **Register a Project Manager** — create a PM login (name, email, initial
-  password).
-- **Reset a driver's code** — for when someone forgets theirs.
-- See live lists of everyone currently registered.
+### Registering everyone
+
+**PM Portal (`/pm`) → Admin Tools tab** — available to both PM and admin
+logins:
+- **Register a User** — name, `@aes-energy.com` email, and a role (Driver /
+  Warehouse, Project Manager, or Admin). They can log in immediately with
+  that email and the shared password.
+- A live table of everyone currently registered.
 
 ### Staying logged in
 
 Once logged in, a session is remembered for 30 days (a signed cookie, not
-stored in plaintext) so drivers don't need to log in every single delivery.
+stored in plaintext) so people don't need to log in every single delivery.
 If the phone is offline when the app is opened, it'll use the last known
 login rather than force a login it can't verify — but the *first* login on
 a given phone always requires being online.
@@ -332,6 +359,42 @@ signed, emailed delivery record.
   the packing (LOADED) step. Tapping one shows the ticket, the checkoff
   (per-item or overall, depending on the ticket), a requirement for 2+
   material photos, and a signature pad for the receiver.
+
+### Ready to Pack: Revise and Send to PM
+
+The Warehouse "Ready to Pack" list (where the LOADED packing step happens)
+now shows **three buttons per delivery** instead of one tap:
+
+- **Revise Ticket** — edit the line items and regenerate the ticket, right
+  from the phone (or, for header fields like Customer/PO/Job Name too, from
+  the PM Portal). **Revising is always allowed, at any stage — there's no
+  hard block.** Instead, the system reacts sensibly to how far along the
+  delivery already is:
+  - **Before packing** — just updates the ticket, nothing else to reconcile.
+  - **Already packed, driver hasn't started** — since the old checked-off
+    items no longer match the revised ticket, it's automatically **reset
+    back to "needs packing"** and reappears in Ready to Pack for a fresh
+    checkoff and signature. Nothing is lost — the previous pack info is
+    simply cleared so it can't be mistaken for still being valid.
+  - **Driver already en route, or delivery already completed** — the
+    delivery's status is left alone (a driver mid-route isn't yanked back,
+    and a completed delivery isn't un-completed), but the ticket record
+    still updates — this is treated as a correction that the people
+    involved need to coordinate on directly.
+  - **Every single revision, at every stage, automatically emails both the
+    assigned PM and a warehouse alert address** with the updated ticket
+    attached, flagging what changed, who changed it, and — when relevant —
+    that it needs to be re-packed or that the driver/receiver should be
+    given a heads-up.
+- **Send to PM** — a dropdown of every registered PM, to send a copy of the
+  current ticket to anyone, independent of who's actually assigned to that
+  job. Also available in the PM Portal.
+- **Pack / Check Inventory** — the existing checkoff + signature flow,
+  unchanged.
+
+The warehouse alert address defaults to `Warehouse@aes-energy.com` —
+change `warehouse_alert_email` in `server_config.json` if that's not the
+right address.
 
 ### How it flows end-to-end
 
@@ -439,51 +502,93 @@ your pilot:
 
 ## 10. Incoming Inventory (packing slips)
 
-A second flow, separate from deliveries, for checking in incoming packing
-slips. It works differently on purpose: since the person scanning needs to
-**see and confirm/edit the job number** right after taking the photo, this
-flow talks to the server immediately rather than queuing for an end-of-shift
-sync. **It requires signal at scan time.**
+A full multi-step flow for checking in incoming shipments — separate from
+deliveries, and separate from Outgoing Inventory (the packing/checkoff step
+covered in section 9). **This entire flow requires being online throughout**
+— there's no offline queue for it, since each step (scanning, confirming,
+emailing the PM, logging pallets) talks to the server immediately.
 
-Flow on the phone:
-1. From Home, tap **+ Incoming Inventory**.
-2. Take a photo of the packing slip.
-3. The app uploads it immediately and shows "Reading job number…" while the
-   server OCRs it.
-4. The detected job number appears in an **editable field** — confirm it or
-   correct it if OCR got it wrong.
-5. **Select which warehouse/area this is going to** — Warehouse, Tent 1,
-   Tent 2, or Econoboxes. Required before it can be confirmed.
-6. Tap **Confirm & File** → the slip is filed to
-   `organized/Job_<number>/Incoming_Packing_Slips/`, **and** a new entry is
-   logged in the running inventory with that location.
-7. If no job number could be read (or something else is wrong with the slip),
-   tap **Flag — No Job Number / Issue** instead. Pick a reason (missing
-   number, illegible, damaged, other), optionally add a note, and tap
-   **Send Flag to PM Team**. This:
-   - Files the photo to `organized/flagged_packing_slips/<id>/`
-   - **Emails PMteam@aes-energy.com** with the reason, note, and the photo attached
-   - (Flagged items are not logged to the location inventory, since there's
-     no confirmed job number to attach them to.)
+Flow on the phone (Warehouse mode → **+ Incoming Inventory**):
+
+1. **Scan the packing slip.** Take a photo of each page — multi-page slips
+   are supported, just tap **Take Photo of Next Page** for each one. Tap
+   **Done Scanning — Continue** once all pages are captured.
+2. **Confirm Job Number and PO Number.** Both are pre-filled from OCR if it
+   found them, editable either way.
+3. **PM lookup.** The first time a job number is seen, you're asked to pick
+   which Project Manager owns it from a dropdown. After that, the system
+   remembers the job → PM pairing automatically — no picking required for
+   that job again.
+4. **The PM is emailed automatically** the moment the job is confirmed, with
+   all the slip's page photos attached.
+5. **Pallet count.** Enter how many pallets arrived, then take one photo of
+   each pallet in turn — the app tracks progress ("2 of 3 photographed") and
+   won't let you continue until every pallet has a photo.
+6. **Choose location(s).** Warehouse, Back Tent, Front Tent, Trailer 6,
+   Trailer 4, Redbox, Front Red, CS 1036, CS 1071, CS 1058, CS 1015, Office,
+   or Truck. Defaults to one location holding all the pallets — tap **+
+   Split Across Another Location** to divide them (e.g. 2 pallets to Back
+   Tent, 1 to Warehouse). **The location counts must add up to the pallet
+   count** — the app blocks finishing until they match exactly.
+7. **Comment** (optional) — anything worth noting about the shipment.
+8. **Finish & Generate QR Code** — logs everything to the running inventory
+   and produces a printable QR-coded PDF (see below). If no job number could
+   be identified at all, **Flag** is available instead (from the confirm
+   screen) — same as before: emails `PMteam@aes-energy.com` with whatever
+   photos exist and a reason, rather than guessing wrong.
+
+### The QR code / printed label
+
+Each finished check-in gets a one-page PDF: a QR code plus the job number,
+PO number, pallet count, and location(s) printed in plain text underneath
+— readable at a glance even without scanning it. The QR code itself encodes
+a link back to that entry in the app.
+
+**No printer is wired up yet** (none has been purchased). The "Print QR
+Code" button on the done screen opens this PDF, and your device's own print
+dialog handles sending it to whatever printer is set up — this works with
+any printer without server-side configuration. Once a specific printer is
+purchased, tell me the make/model and direct network printing (skipping
+the browser dialog entirely) is a reasonable next step.
 
 ### Running inventory report (Excel)
 
-Every confirmed Incoming Inventory check-in is logged — job number,
-location, who confirmed it, and when — building up a live record of what's
-been received and roughly where it physically is. This is separate from the
-job folders on disk; it's a location ledger, not a file cabinet.
+Every finished check-in is logged — job number, PO number, pallet count,
+location(s), PM, who confirmed it, when, and any comment — building a live
+record of what's been received and where it physically is.
 
 **PM Portal → Inventory tab** shows this as a live table, and an
 **Export to Excel** button downloads a `.xlsx` report with two sheets:
-- **Current Inventory** — every item, its location, who checked it in, and
-  when — ready to open, filter, or print.
-- **Summary by Location** — a count of items currently at each of the four
+- **Current Inventory** — every item with full detail, ready to open,
+  filter, or print.
+- **Summary by Location** — pallet counts at each of the thirteen
   locations, plus a total.
 
 This is a snapshot at the moment of export, not a live-linked spreadsheet —
 re-export anytime for a fresh copy. Available to PM and admin logins; any
 logged-in role can view the table itself, but the export button is
 PM/admin-only.
+
+### End-of-day report
+
+A separate script, `send_daily_inventory_report.py`, meant for a daily cron
+job (e.g. 6pm):
+
+```bash
+# crontab -e
+0 18 * * * cd /path/to/aes_logistics/server && /path/to/python3 send_daily_inventory_report.py >> /var/log/aes_logistics/daily_report.log 2>&1
+```
+
+Emails every registered PM and admin a summary of everything checked in
+that day — job/PO numbers, pallet counts, locations, comments, and a
+clickable link to each entry (opens the app; requires being logged in,
+same as any internal link). If "everyone" should mean a broader audience
+than PMs + admins, that's a one-line change in the script.
+
+It needs `PUBLIC_BASE_URL` set in `.env` (your real domain, or your current
+tunnel URL while testing) so the links in the email actually resolve
+somewhere real — without it, links will be relative and likely won't open
+correctly from an email client.
 
 **What this does now:** packing an outgoing delivery for Job #X (the
 LOADED checkoff step) automatically marks every currently-active inventory
@@ -648,28 +753,30 @@ trusting this for real deliveries.
   verified). I have not tested the installed PWA on a real iPhone/Android
   device, since that requires an actual phone and a live HTTPS server — do a
   short pilot with one driver before rolling out to the full team.
-- **Incoming Inventory requires signal to actually reach the server** — but
-  nothing is lost if signal drops; see the retry queue section above.
-- **Server-side staging cleanup:** once a scan succeeds, the photo is staged
-  on the server waiting for confirm/flag. The retry queue handles this fine
-  as long as the app is opened again — but if a phone is lost or the app is
-  never reopened, that staged photo lingers on the server indefinitely.
-  Fine for a pilot; worth adding a cleanup job before wider rollout.
+- **Incoming Inventory requires signal throughout the entire flow** — scan,
+  confirm, pallets, and finalize each talk to the server immediately. There
+  is no offline retry queue for this flow (unlike the ad-hoc delivery
+  flow) — a deliberate trade-off given how many steps are now involved.
+  Test it somewhere with a reliable connection.
+- **Server-side session cleanup:** an in-progress Incoming Inventory scan
+  (pages taken, job not yet confirmed, or confirmed but pallets/locations
+  not yet finished) stays on the server until finalized. If someone starts
+  a scan and never finishes it, that session lingers indefinitely. Fine for
+  a pilot; worth adding a cleanup job before wider rollout.
 - The flag email requires real SMTP credentials in `.env` (see section 9) —
   it will not send anything until that's configured.
-- **No self-service "forgot code" flow.** If a driver forgets their code,
-  only an admin can reset it (Admin Tools). Worth adding a lighter-weight
-  recovery option if this becomes a frequent support request.
-- **Name collisions.** Driver accounts are keyed by name (case-insensitive).
-  Two different people typing the same name would share one account and
-  code. Fine for a small named fleet; would need real usernames/emails if
-  the team grows or names could collide.
-- I tested the full login system — driver self-registration, wrong-code
-  rejection, admin login with the real credentials provided, admin-only
-  user registration (including the duplicate-name safety check), admin-only
-  code reset, and the offline cached-session fallback — using a simulated
-  browser environment and directly against the running server. I have not
-  tested it in a real phone browser yet; do that as part of your pilot.
+- **Shared password is inherently weak.** Every account uses the same
+  password by design (see section 8) — fine for a closed pilot, not for real
+  production use without moving to per-user passwords or SSO.
+- **No name collisions anymore** — accounts are keyed by email now, not
+  name, so this is no longer a concern.
+- I tested the full login system — unified email/password login, wrong-
+  password rejection, role-based tile display (driver vs. admin/PM), user
+  registration (including duplicate-email and invalid-role rejection),
+  permission checks, and the offline cached-session fallback — using a
+  simulated browser environment and directly against the running server. I
+  have not tested it in a real phone browser yet; do that as part of your
+  pilot.
 - **SMS and ETA require Twilio and Google Maps accounts** you set up
   yourself (see section 9) — until then, starting a delivery still works,
   it just won't text the receiver or show an ETA.
@@ -705,3 +812,34 @@ trusting this for real deliveries.
   (previously admin-only) — this was a deliberate relaxation to match "PM
   has access to everything." If that's broader access than you actually
   want PMs to have, let me know and I'll scope it back down.
+- **New Incoming Inventory flow (multi-page, PO#, PM directory, pallets,
+  split locations, QR code):** built and tested end-to-end against the
+  running server — multi-page scanning, the job→PM directory (both the
+  "new job needs a PM" path and the "remembered from before" path),
+  pallet-count enforcement, location-split validation (rejecting mismatched
+  totals), QR code generation (confirmed it actually decodes to the right
+  link, not just that a file exists), and the daily report email content.
+  Also ran a full simulated-browser test of the entire wizard UI. Two real
+  gaps, not just caveats: (1) **no printer is connected yet** — the "Print
+  QR Code" button opens a PDF for your device's own print dialog to handle,
+  since no printer has been purchased; tell me the make/model once you
+  have one and direct network printing is a reasonable next step. (2) the
+  **PO number and job number OCR patterns are untested against your real
+  packing slips** — same caveat as the original job-number pattern in
+  section 3, now doubled since there are two patterns to tune.
+- **Outbound workflow (Revise / Send to PM):** tested end-to-end against
+  the running server — creating a ticket, revising it from the warehouse
+  side before packing, sending a copy to a different PM than the one
+  assigned, packing, then **revising again after packing** (confirmed it
+  succeeds rather than being blocked, correctly resets to "needs re-packing"
+  and reappears in the Ready to Pack queue), re-packing, starting the
+  delivery, and **revising again while the driver is en route** (confirmed
+  it succeeds and leaves the delivery's status untouched rather than
+  yanking it back), and finally **revising after completion** (confirmed it
+  succeeds as a record correction without un-completing the delivery).
+  Every one of these fired the PM + warehouse alert email. Also ran a full
+  simulated-browser test of both buttons on the phone's Ready to Pack list.
+  Revising from the phone currently edits line items only (not header
+  fields like customer/PO/job name) — those can still be edited via the
+  same endpoint from the PM Portal, or say the word if you want a fuller
+  header-editing UI added to the phone screen too.

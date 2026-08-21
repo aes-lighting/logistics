@@ -19,35 +19,14 @@
   <section id="screen-login" class="screen hidden">
     <div class="setup-card">
       <div class="wordmark">AES<span>LOGISTICS</span></div>
-      <p class="setup-label">Driver / Warehouse Login</p>
+      <p class="setup-label">Log In</p>
 
-      <input id="login-name-input" type="text" placeholder="Your name" autocomplete="off">
-      <input id="login-code-input" type="text" placeholder="Your code (6 digits or a word)" autocomplete="off">
-      <p class="hint login-hint">First time? Just make up a code here — it becomes yours from now on.</p>
+      <input id="login-email-input" type="email" placeholder="you@aes-energy.com" autocomplete="off">
+      <input id="login-password-input" type="password" placeholder="Password" autocomplete="off">
 
       <div id="login-error" class="login-error hidden"></div>
 
-      <button id="btn-login-driver" class="btn btn-primary btn-full">Log In</button>
-      <button id="btn-goto-admin-login" class="btn-link">Admin Login</button>
-      <p style="text-align: center; margin-top: 20px; font-size: 0.9em;">
-        <a href="/pm" style="color: #0066cc; text-decoration: none;">→ Go to PM Portal</a>
-      </p>
-    </div>
-  </section>
-
-  <!-- Login: fixed admin account -->
-  <section id="screen-admin-login" class="screen hidden">
-    <div class="setup-card">
-      <div class="wordmark">AES<span>LOGISTICS</span></div>
-      <p class="setup-label">Admin / PM Login</p>
-
-      <input id="admin-login-email-input" type="email" placeholder="Admin email" autocomplete="off">
-      <input id="admin-login-password-input" type="password" placeholder="Password" autocomplete="off">
-
-      <div id="admin-login-error" class="login-error hidden"></div>
-
-      <button id="btn-login-admin" class="btn btn-primary btn-full">Log In</button>
-      <button id="btn-goto-driver-login" class="btn-link">Back to Driver Login</button>
+      <button id="btn-login" class="btn btn-primary btn-full">Log In</button>
     </div>
   </section>
 
@@ -105,20 +84,7 @@
       <button id="btn-incoming-inventory" class="btn btn-secondary btn-huge menu-spacing">
         + Incoming Inventory
       </button>
-      <p class="hint center">Requires signal &mdash; scans and confirms in real time.</p>
-
-      <div class="queue-section">
-        <div class="queue-header">
-          <h2>Incoming Inventory &mdash; Pending</h2>
-          <span id="incoming-queue-count" class="badge">0</span>
-        </div>
-        <div id="incoming-queue-list" class="queue-list"><!-- populated by JS --></div>
-
-        <button id="btn-incoming-retry" class="btn btn-accent btn-full" disabled>
-          Retry Now
-        </button>
-        <div id="incoming-retry-status" class="sync-status"></div>
-      </div>
+      <p class="hint center">Requires signal throughout &mdash; scans, emails the PM, and logs the shipment in real time.</p>
 
       <div class="queue-section">
         <div class="queue-header">
@@ -177,6 +143,55 @@
     <button id="btn-pack-done-home" class="btn btn-primary btn-full">Back to Home</button>
   </section>
 
+  <!-- Revise Ticket -->
+  <section id="screen-revise-ticket" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-revise-back" class="icon-btn">&#8592;</button>
+      <div class="capture-title">Revise Ticket &mdash; Job #<span id="revise-job-number"></span></div>
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <div class="capture-body">
+      <div class="photo-group">
+        <h3>Materials</h3>
+        <div id="revise-line-items"></div>
+        <button id="btn-revise-add-row" class="btn btn-secondary btn-full menu-spacing-sm">+ Add Item</button>
+      </div>
+      <div id="revise-status" class="status-line-driver"></div>
+    </div>
+
+    <div class="capture-footer">
+      <button id="btn-revise-submit" class="btn btn-primary btn-huge">
+        Save Revision &amp; Notify
+      </button>
+    </div>
+  </section>
+
+  <!-- Send to PM -->
+  <section id="screen-send-to-pm" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-sendpm-back" class="icon-btn">&#8592;</button>
+      <div class="capture-title">Send Ticket to PM &mdash; Job #<span id="sendpm-job-number"></span></div>
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <div class="capture-body">
+      <div class="photo-group">
+        <p class="hint">Send a copy of this ticket to any PM, regardless of who's already assigned.</p>
+        <select id="sendpm-select" class="job-number-input">
+          <option value="">— Select a PM —</option>
+        </select>
+      </div>
+      <div id="sendpm-status" class="status-line-driver"></div>
+    </div>
+
+    <div class="capture-footer">
+      <button id="btn-sendpm-submit" class="btn btn-primary btn-huge">
+        Send
+      </button>
+    </div>
+  </section>
+
   <!-- Capture / delivery-in-progress screen -->
   <section id="screen-capture" class="screen hidden">
     <header class="topbar">
@@ -233,6 +248,7 @@
   </section>
 
   <!-- Incoming Inventory: take the packing slip photo -->
+  <!-- Incoming Inventory: capture packing slip page(s) -->
   <section id="screen-incoming-capture" class="screen hidden">
     <header class="topbar">
       <button id="btn-cancel-incoming" class="icon-btn">&#10005;</button>
@@ -245,10 +261,10 @@
         <div class="photo-group-header">
           <h3>Packing Slip</h3>
         </div>
-        <p class="hint">Take a clear photo of the incoming packing slip. It will be scanned automatically.</p>
+        <p class="hint">Take a photo of each page of the packing slip. Multiple pages are fine — add one photo per page.</p>
         <div id="incoming-thumb" class="thumb-row"></div>
         <label class="btn btn-secondary btn-full capture-btn">
-          Take Packing Slip Photo
+          <span id="incoming-capture-btn-label">Take Packing Slip Photo</span>
           <input type="file" accept="image/*" capture="environment" id="input-incoming" hidden>
         </label>
       </div>
@@ -258,34 +274,110 @@
       <div class="spinner"></div>
       <p>Reading job number&hellip;</p>
     </div>
+
+    <div class="capture-footer">
+      <button id="btn-incoming-done-scanning" class="btn btn-primary btn-huge" disabled>
+        Done Scanning &mdash; Continue
+      </button>
+    </div>
   </section>
 
-  <!-- Incoming Inventory: confirm/edit the OCR'd job number -->
+  <!-- Incoming Inventory: confirm/edit the OCR'd job + PO number -->
   <section id="screen-incoming-confirm" class="screen hidden">
     <header class="topbar">
       <button id="btn-back-to-incoming-capture" class="icon-btn">&#8592;</button>
-      <div class="capture-title">Confirm Job Number</div>
+      <div class="capture-title">Confirm Job / PO</div>
       <div class="topbar-spacer"></div>
     </header>
 
     <div class="capture-body">
-      <img id="confirm-thumb" class="confirm-thumb" alt="Packing slip photo">
+      <div id="confirm-thumbs" class="thumb-row"></div>
 
       <div id="ocr-guess-note" class="ocr-note"></div>
 
       <label class="field-label" for="job-number-input">Job Number</label>
       <input type="text" id="job-number-input" class="job-number-input" placeholder="Enter job number" inputmode="numeric">
 
-      <label class="field-label" for="incoming-location-select">Which warehouse is this going to?</label>
-      <select id="incoming-location-select" class="job-number-input">
-        <option value="">— Select a location —</option>
-      </select>
+      <label class="field-label" for="po-number-input">PO Number</label>
+      <input type="text" id="po-number-input" class="job-number-input" placeholder="Enter PO number">
 
-      <button id="btn-confirm-file" class="btn btn-primary btn-huge menu-spacing">
-        Confirm &amp; File
+      <div id="pm-picker-wrap" class="hidden">
+        <p class="hint">This job hasn't been seen before &mdash; who's the Project Manager?</p>
+        <select id="pm-picker-select" class="job-number-input">
+          <option value="">&mdash; Select a PM &mdash;</option>
+        </select>
+      </div>
+
+      <button id="btn-confirm-job" class="btn btn-primary btn-huge menu-spacing">
+        Confirm Job
       </button>
       <button id="btn-open-flag" class="btn btn-warning btn-full menu-spacing-sm">
         Flag &mdash; No Job Number / Issue
+      </button>
+    </div>
+  </section>
+
+  <!-- Incoming Inventory: pallet count + one photo per pallet -->
+  <section id="screen-incoming-pallets" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-pallets-back" class="icon-btn">&#8592;</button>
+      <div class="capture-title">Pallet Count</div>
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <div class="capture-body">
+      <div class="photo-group">
+        <h3>How many pallets?</h3>
+        <input type="number" id="pallet-count-input" class="job-number-input" min="1" placeholder="e.g. 3" inputmode="numeric">
+        <button id="btn-set-pallet-count" class="btn btn-secondary btn-full menu-spacing-sm">Set Count</button>
+      </div>
+
+      <div id="pallet-photo-group" class="photo-group hidden">
+        <h3>Photo of Each Pallet</h3>
+        <p class="hint" id="pallet-progress-hint"></p>
+        <div id="pallet-thumbs" class="thumb-row"></div>
+        <label class="btn btn-secondary btn-full capture-btn">
+          <span id="pallet-capture-btn-label">Take Pallet Photo</span>
+          <input type="file" accept="image/*" capture="environment" id="input-pallet-photo" hidden>
+        </label>
+      </div>
+    </div>
+
+    <div class="capture-footer">
+      <button id="btn-pallets-continue" class="btn btn-primary btn-huge" disabled>
+        Continue
+      </button>
+    </div>
+  </section>
+
+  <!-- Incoming Inventory: choose location(s), optionally split, comment, finalize -->
+  <section id="screen-incoming-locations" class="screen hidden">
+    <header class="topbar">
+      <button id="btn-locations-back" class="icon-btn">&#8592;</button>
+      <div class="capture-title">Choose Location</div>
+      <div class="topbar-spacer"></div>
+    </header>
+
+    <div class="capture-body">
+      <div class="photo-group">
+        <h3>Where is this going?</h3>
+        <p class="hint" id="location-total-hint"></p>
+        <div id="location-rows"></div>
+        <button id="btn-add-location-row" class="btn btn-secondary btn-full menu-spacing-sm">
+          + Split Across Another Location
+        </button>
+      </div>
+
+      <div class="photo-group">
+        <h3>Comment (optional)</h3>
+        <textarea id="incoming-comment-input" class="job-number-input flag-note" placeholder="Anything worth noting about this shipment"></textarea>
+      </div>
+    </div>
+
+    <div class="capture-footer">
+      <p id="finalize-hint" class="complete-hint">Location counts must add up to the pallet count.</p>
+      <button id="btn-finalize-incoming" class="btn btn-primary btn-huge" disabled>
+        Finish &amp; Generate QR Code
       </button>
     </div>
   </section>
@@ -299,8 +391,6 @@
     </header>
 
     <div class="capture-body">
-      <img id="flag-thumb" class="confirm-thumb" alt="Packing slip photo">
-
       <label class="field-label" for="flag-reason-select">Reason</label>
       <select id="flag-reason-select" class="job-number-input">
         <option value="Missing job number">Missing job number</option>
@@ -312,7 +402,7 @@
       <label class="field-label" for="flag-note-input">Note (optional)</label>
       <textarea id="flag-note-input" class="job-number-input flag-note" placeholder="Any extra detail for the PM team"></textarea>
 
-      <p class="hint">This will email the PM team (PMteam@aes-energy.com) with this photo attached.</p>
+      <p class="hint">This will email the PM team (PMteam@aes-energy.com) with the photo(s) attached.</p>
 
       <button id="btn-submit-flag" class="btn btn-warning btn-huge menu-spacing">
         Send Flag to PM Team
@@ -323,10 +413,11 @@
   <!-- Incoming Inventory: done confirmation -->
   <section id="screen-incoming-done" class="screen hidden">
     <div class="stamp-wrap">
-      <div id="incoming-done-stamp" class="stamp">FILED</div>
+      <div id="incoming-done-stamp" class="stamp">LOGGED</div>
     </div>
     <p id="incoming-done-sub" class="stamp-sub"></p>
-    <button id="btn-incoming-done-home" class="btn btn-primary btn-full">Back to Home</button>
+    <button id="btn-print-qr" class="btn btn-accent btn-full hidden">Print QR Code</button>
+    <button id="btn-incoming-done-home" class="btn btn-primary btn-full menu-spacing-sm">Back to Home</button>
   </section>
 
   <!-- Scheduled Delivery: Start Delivery (triggers SMS + ETA) -->
