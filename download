@@ -1,0 +1,16 @@
+# Never bake secrets or generated data into the image — these are supplied
+# at runtime via env_file / volumes instead (see docker-compose.yml).
+
+server/.env
+server/auth_store.json
+server/schedule_store.json
+server/schedule_files/
+server/incoming/
+server/organized/
+
+**/__pycache__/
+**/*.pyc
+.git/
+.gitignore
+*.md
+docker-compose.override.yml

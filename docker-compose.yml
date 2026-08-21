@@ -1,0 +1,28 @@
+# AES Logistics — Docker Compose setup
+#
+# Before first run:
+#   1. cp server/.env.example server/.env   (then fill it in)
+#   2. mkdir -p data/organized data/incoming data/schedule_files
+#      touch data/auth_store.json data/schedule_store.json
+#
+# Then:
+#   docker compose up -d --build
+#
+# Everything under ./data persists across image rebuilds/updates — rebuilding
+# the image (new code) never touches driver accounts, delivery records,
+# uploaded tickets, or photos.
+
+services:
+  aes-logistics:
+    build: .
+    ports:
+      - "5000:5000"
+    env_file:
+      - server/.env
+    volumes:
+      - ./data/organized:/app/server/organized
+      - ./data/incoming:/app/server/incoming
+      - ./data/schedule_files:/app/server/schedule_files
+      - ./data/auth_store.json:/app/server/auth_store.json
+      - ./data/schedule_store.json:/app/server/schedule_store.json
+    restart: unless-stopped
