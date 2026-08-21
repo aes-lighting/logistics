@@ -665,9 +665,6 @@ def incoming_flag():
 @app.route("/api/auth/driver_login", methods=["POST"])
 def api_driver_login():
     """Driver self-service login: name + code (first use registers)"""
-    data = request.get_json() or {}
-    # Delegate to the existing login logic
-    request.json = data
     return api_login()
     
 @app.route("/api/auth/login", methods=["POST"])
