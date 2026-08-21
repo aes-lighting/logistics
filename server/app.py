@@ -229,13 +229,13 @@ def process_delivery(delivery_dir, metadata, cfg):
     return job_number, target_dir
 
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def serve_app():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
-@app.route("/pm")
-@app.route("/pm/")
+@app.route("/pm", methods=["GET"])
+@app.route("/pm/", methods=["GET"])
 def serve_pm_portal():
     return send_from_directory(PM_STATIC_DIR, "index.html")
 
