@@ -2,413 +2,270 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
-<meta name="theme-color" content="#14171C">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>AES Logistics</title>
-<link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AES Logistics — PM Portal</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <div id="app">
 
-  <!-- Login: driver self-service (name + code, first use registers it) -->
-  <section id="screen-login" class="screen hidden">
-    <div class="setup-card">
+  <!-- Login -->
+  <section id="screen-login" class="screen">
+    <div class="login-card">
       <div class="wordmark">AES<span>LOGISTICS</span></div>
-      <p class="setup-label">Driver / Warehouse Login</p>
+      <p class="subtitle">Project Manager Portal</p>
+      <p style="text-align: center; margin-top: 20px; font-size: 0.9em;">
+        <a href="/" style="color: #0066cc; text-decoration: none;">→ Go to Driver App</a>
+      </p>
 
-      <input id="login-name-input" type="text" placeholder="Your name" autocomplete="off">
-      <input id="login-code-input" type="text" placeholder="Your code (6 digits or a word)" autocomplete="off">
-      <p class="hint login-hint">First time? Just make up a code here — it becomes yours from now on.</p>
-
-      <div id="login-error" class="login-error hidden"></div>
-
-      <button id="btn-login-driver" class="btn btn-primary btn-full">Log In</button>
-      <button id="btn-goto-admin-login" class="btn-link">Admin Login</button>
+      <input id="login-email" type="email" placeholder="Email" autocomplete="off">
+      <input id="login-password" type="password" placeholder="Password" autocomplete="off">
+      <div id="login-error" class="error-box hidden"></div>
+      <button id="btn-login" class="btn btn-primary btn-full">Log In</button>
     </div>
   </section>
 
-  <!-- Login: fixed admin account -->
-  <section id="screen-admin-login" class="screen hidden">
-    <div class="setup-card">
-      <div class="wordmark">AES<span>LOGISTICS</span></div>
-      <p class="setup-label">Admin / PM Login</p>
-
-      <input id="admin-login-email-input" type="email" placeholder="Admin email" autocomplete="off">
-      <input id="admin-login-password-input" type="password" placeholder="Password" autocomplete="off">
-
-      <div id="admin-login-error" class="login-error hidden"></div>
-
-      <button id="btn-login-admin" class="btn btn-primary btn-full">Log In</button>
-      <button id="btn-goto-driver-login" class="btn-link">Back to Driver Login</button>
-    </div>
-  </section>
-
-  <!-- Role menu: shown after every login -->
-  <section id="screen-role-menu" class="screen hidden">
+  <!-- Dashboard -->
+  <section id="screen-dashboard" class="screen hidden">
     <header class="topbar">
       <div class="wordmark small">AES<span>LOGISTICS</span></div>
-      <button id="btn-role-menu-logout" class="icon-btn" title="Log out">&#9881;</button>
-    </header>
-    <p class="setup-label center">Choose what you're doing</p>
-    <div id="role-menu-tiles" class="role-tiles"><!-- populated by JS --></div>
-  </section>
-
-  <!-- Home screen -->
-  <section id="screen-home" class="screen hidden">
-    <header class="topbar">
-      <button id="btn-switch-role" class="icon-btn" title="Switch role">&#8635;</button>
-      <div class="wordmark small">AES<span>LOGISTICS</span></div>
-      <button id="btn-change-driver" class="icon-btn" title="Log out">&#9881;</button>
+      <div class="topbar-right">
+        <span id="user-display" class="user-display"></span>
+        <a href="/" style="color: #0066cc; text-decoration: none; margin-right: 15px;">Driver App</a>
+        <button id="btn-logout" class="btn-link">Log Out</button>
+      </div>
     </header>
 
-    <div class="driver-banner">
-      Logged in as: <strong id="driver-name-display"></strong>
-      <button id="btn-logout" class="btn-link inline-link">Log Out</button>
-    </div>
+    <nav class="tab-row">
+      <button id="tab-btn-deliveries" class="tab-btn tab-active">Deliveries</button>
+      <button id="tab-btn-inventory" class="tab-btn">Inventory</button>
+      <button id="tab-btn-admin" class="tab-btn">Admin Tools</button>
+    </nav>
 
-    <div id="section-drivers" class="hidden">
-      <button id="btn-new-delivery" class="btn btn-primary btn-huge">
-        + New Delivery
-      </button>
+    <main class="main-grid" id="tab-deliveries">
 
-      <div class="queue-section">
-        <div class="queue-header">
-          <h2>My Deliveries</h2>
-          <span id="scheduled-count" class="badge">0</span>
+      <!-- Calendar sync -->
+      <section class="card">
+        <h2>Calendar Sync</h2>
+        <p class="hint">
+          Paste a read-only ICS calendar feed URL from Outlook or Google Calendar.
+          This is used to surface upcoming deliveries below — it's one-way (read only),
+          nothing is written back to your calendar.
+        </p>
+        <div class="row">
+          <input id="ics-url-input" type="text" placeholder="https://... .ics feed URL" class="grow">
+          <button id="btn-save-ics" class="btn btn-secondary">Save</button>
         </div>
-        <div id="scheduled-list" class="queue-list"><!-- populated by JS --></div>
-      </div>
+        <div id="ics-save-status" class="status-line"></div>
+      </section>
 
-      <div class="queue-section">
-        <div class="queue-header">
-          <h2>Pending Sync</h2>
-          <span id="queue-count" class="badge">0</span>
+      <!-- Upcoming calendar events -->
+      <section class="card">
+        <h2>Upcoming Calendar Events</h2>
+        <p class="hint">Events from your connected calendar in the next 14 days. Set one up as a delivery to start the ticket/reminder process.</p>
+        <div id="calendar-events-list" class="list">Loading…</div>
+      </section>
+
+      <!-- Create / edit delivery -->
+      <section class="card" id="create-delivery-card">
+        <h2 id="create-delivery-title">Schedule a Delivery</h2>
+        <div class="form-grid">
+          <label>Job Number
+            <input id="new-job-number" type="text" placeholder="e.g. 55321">
+          </label>
+          <label>Delivery Date
+            <input id="new-delivery-date" type="date">
+          </label>
+          <label>Receiver Name
+            <input id="new-receiver-name" type="text" placeholder="Who signs on site">
+          </label>
+          <label>Receiver Email
+            <input id="new-receiver-email" type="email" placeholder="receiver@example.com">
+          </label>
+          <label>Receiver Phone (for the "on the way" text)
+            <input id="new-receiver-phone" type="tel" placeholder="+15551234567">
+          </label>
+          <label>PM Email
+            <input id="new-pm-email" type="email" placeholder="you@aes-energy.com">
+          </label>
+          <label>Site Address
+            <input id="new-site-address" type="text" placeholder="123 Job Site Rd (used for ETA)">
+          </label>
+          <label>Assigned Driver
+            <select id="new-assigned-driver">
+              <option value="">— Select a driver —</option>
+            </select>
+          </label>
+          <label>Customer
+            <input id="new-customer-name" type="text" placeholder="Customer / company name">
+          </label>
+          <label>Customer PO#
+            <input id="new-customer-po" type="text" placeholder="e.g. PO-9981">
+          </label>
+          <label>Job Name
+            <input id="new-job-name" type="text" placeholder="e.g. Acme HQ Retrofit">
+          </label>
+          <label>Delivery Method
+            <input id="new-delivery-method" type="text" placeholder="e.g. AES Truck, Freight">
+          </label>
         </div>
-        <div id="queue-list" class="queue-list"><!-- populated by JS --></div>
+        <input type="hidden" id="new-calendar-event-uid">
+        <div id="create-delivery-status" class="status-line"></div>
+        <button id="btn-create-delivery" class="btn btn-primary">Schedule Delivery</button>
+      </section>
 
-        <button id="btn-sync" class="btn btn-accent btn-full" disabled>
-          Sync Now
-        </button>
-        <div id="sync-status" class="sync-status"></div>
-      </div>
-    </div>
+      <!-- Scheduled deliveries table -->
+      <section class="card card-wide">
+        <h2>Scheduled Deliveries</h2>
+        <table class="deliveries-table">
+          <thead>
+            <tr>
+              <th>Job #</th>
+              <th>Date</th>
+              <th>Receiver</th>
+              <th>Assigned</th>
+              <th>Status</th>
+              <th>Ticket</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="deliveries-tbody">
+            <tr><td colspan="7">Loading…</td></tr>
+          </tbody>
+        </table>
+      </section>
 
-    <div id="section-warehouse" class="hidden">
-      <button id="btn-incoming-inventory" class="btn btn-secondary btn-huge menu-spacing">
-        + Incoming Inventory
-      </button>
-      <p class="hint center">Requires signal &mdash; scans and confirms in real time.</p>
+    </main>
 
-      <div class="queue-section">
-        <div class="queue-header">
-          <h2>Incoming Inventory &mdash; Pending</h2>
-          <span id="incoming-queue-count" class="badge">0</span>
+    <!-- Inventory tab -->
+    <main class="main-grid hidden" id="tab-inventory">
+      <section class="card card-wide">
+        <div class="row" style="justify-content: space-between; align-items: center;">
+          <h2 style="margin:0;">Current Inventory &mdash; Running Location Log</h2>
+          <button id="btn-export-inventory" class="btn btn-primary">Export to Excel</button>
         </div>
-        <div id="incoming-queue-list" class="queue-list"><!-- populated by JS --></div>
+        <p class="hint">Everything checked in via Incoming Inventory, and which warehouse/tent/area it was tagged with.</p>
+        <table class="deliveries-table">
+          <thead>
+            <tr>
+              <th>Job #</th>
+              <th>Location</th>
+              <th>Confirmed By</th>
+              <th>Confirmed At</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="inventory-tbody">
+            <tr><td colspan="5">Loading&hellip;</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
 
-        <button id="btn-incoming-retry" class="btn btn-accent btn-full" disabled>
-          Retry Now
-        </button>
-        <div id="incoming-retry-status" class="sync-status"></div>
-      </div>
-
-      <div class="queue-section">
-        <div class="queue-header">
-          <h2>Outgoing Inventory &mdash; Ready to Pack</h2>
-          <span id="pack-count" class="badge">0</span>
+    <!-- Admin Tools tab -->
+    <main class="main-grid hidden" id="tab-admin">
+      <section class="card">
+        <h2>Register a Driver / Warehouse User</h2>
+        <p class="hint">Sets someone up with a login before their first shift.</p>
+        <div class="form-grid">
+          <label>Name
+            <input id="admin-reg-driver-name" type="text" placeholder="e.g. Sarah T.">
+          </label>
+          <label>PIN / Code
+            <input id="admin-reg-driver-code" type="text" placeholder="6 digits or a word">
+          </label>
         </div>
-        <p class="hint">Tickets waiting to be packed, checked off, and signed before a driver can take them.</p>
-        <div id="pack-list" class="queue-list"><!-- populated by JS --></div>
-      </div>
-    </div>
-  </section>
+        <div id="admin-reg-driver-status" class="status-line"></div>
+        <button id="btn-admin-reg-driver" class="btn btn-primary">Register User</button>
+      </section>
 
-  <!-- Outgoing Inventory: pack + checkoff + sign a ticket -->
-  <section id="screen-pack-ticket" class="screen hidden">
-    <header class="topbar">
-      <button id="btn-pack-cancel" class="icon-btn">&#10005;</button>
-      <div class="capture-title">Pack Order</div>
-      <div class="topbar-spacer"></div>
-    </header>
-
-    <div class="capture-body">
-      <div class="photo-group">
-        <h3>Ticket &mdash; Job #<span id="pack-job-number"></span></h3>
-        <img id="pack-ticket-image" class="confirm-thumb" alt="Delivery ticket">
-      </div>
-
-      <div class="photo-group">
-        <h3>Check Off Items</h3>
-        <div id="pack-line-items"><!-- populated by JS: checkboxes or single overall checkbox --></div>
-      </div>
-
-      <div class="photo-group">
-        <h3>Packed By</h3>
-        <label class="field-label" for="pack-packed-by-input">Your name</label>
-        <input type="text" id="pack-packed-by-input" class="job-number-input" placeholder="Who packed this order">
-
-        <canvas id="pack-signature-canvas" class="signature-canvas"></canvas>
-        <button id="btn-pack-clear-signature" class="btn btn-secondary btn-full menu-spacing-sm">Clear Signature</button>
-      </div>
-    </div>
-
-    <div class="capture-footer">
-      <p id="pack-complete-hint" class="complete-hint">Check off all items, enter your name, and sign to finish.</p>
-      <button id="btn-pack-complete" class="btn btn-primary btn-huge" disabled>
-        Confirm Packed &amp; Sign
-      </button>
-    </div>
-  </section>
-
-  <!-- Outgoing Inventory: packing done -->
-  <section id="screen-pack-done" class="screen hidden">
-    <div class="stamp-wrap">
-      <div class="stamp">PACKED &amp;<br>VERIFIED</div>
-    </div>
-    <p id="pack-done-sub" class="stamp-sub">This order is now ready for a driver to pick up.</p>
-    <button id="btn-pack-done-home" class="btn btn-primary btn-full">Back to Home</button>
-  </section>
-
-  <!-- Capture / delivery-in-progress screen -->
-  <section id="screen-capture" class="screen hidden">
-    <header class="topbar">
-      <button id="btn-cancel-delivery" class="icon-btn">&#10005;</button>
-      <div class="capture-title">New Delivery</div>
-      <div class="topbar-spacer"></div>
-    </header>
-
-    <div class="capture-body">
-
-      <div class="photo-group">
-        <div class="photo-group-header">
-          <span class="req-dot" data-filled="false"></span>
-          <h3>Delivery Ticket / Packing Slip</h3>
+      <section class="card">
+        <h2>Register a Project Manager</h2>
+        <div class="form-grid">
+          <label>Name
+            <input id="admin-reg-pm-name" type="text" placeholder="e.g. Julia PM">
+          </label>
+          <label>Email
+            <input id="admin-reg-pm-email" type="email" placeholder="julia@aes-energy.com">
+          </label>
+          <label>Initial Password
+            <input id="admin-reg-pm-password" type="text" placeholder="At least 4 characters">
+          </label>
         </div>
-        <p class="hint">Take a clear photo of the ticket showing the job number.</p>
-        <div id="ticket-thumbs" class="thumb-row"></div>
-        <label class="btn btn-secondary btn-full capture-btn">
-          Take Ticket Photo
-          <input type="file" accept="image/*" capture="environment" id="input-ticket" hidden>
-        </label>
-      </div>
+        <div id="admin-reg-pm-status" class="status-line"></div>
+        <button id="btn-admin-reg-pm" class="btn btn-primary">Register PM</button>
+      </section>
 
-      <div class="photo-group">
-        <div class="photo-group-header">
-          <span class="req-dot" data-filled="false"></span>
-          <h3>Pallet / Boxes</h3>
+      <section class="card">
+        <h2>Reset a Driver's Code</h2>
+        <div class="form-grid">
+          <label>Driver Name (exact)
+            <input id="admin-reset-name" type="text" placeholder="e.g. Mike R.">
+          </label>
+          <label>New Code
+            <input id="admin-reset-code" type="text" placeholder="6 digits or a word">
+          </label>
         </div>
-        <p class="hint">Required for every delivery &mdash; photo of the pallet or boxes delivered.</p>
-        <div id="pallet-thumbs" class="thumb-row"></div>
-        <label class="btn btn-secondary btn-full capture-btn">
-          Take Pallet/Box Photo
-          <input type="file" accept="image/*" capture="environment" id="input-pallet" hidden>
-        </label>
-      </div>
+        <div id="admin-reset-status" class="status-line"></div>
+        <button id="btn-admin-reset" class="btn btn-primary">Reset Code</button>
+      </section>
 
-    </div>
-
-    <div class="capture-footer">
-      <p id="complete-hint" class="complete-hint">Add at least 1 ticket photo and 1 pallet/box photo to complete.</p>
-      <button id="btn-complete-delivery" class="btn btn-primary btn-huge" disabled>
-        Complete Delivery
-      </button>
-    </div>
-  </section>
-
-  <!-- Delivery complete confirmation (stamp moment) -->
-  <section id="screen-complete" class="screen hidden">
-    <div class="stamp-wrap">
-      <div class="stamp">DELIVERY<br>LOGGED</div>
-    </div>
-    <p class="stamp-sub">Queued for sync &mdash; tap <strong>Sync Now</strong> at end of shift.</p>
-    <button id="btn-back-home" class="btn btn-primary btn-full">Back to Home</button>
-  </section>
-
-  <!-- Incoming Inventory: take the packing slip photo -->
-  <section id="screen-incoming-capture" class="screen hidden">
-    <header class="topbar">
-      <button id="btn-cancel-incoming" class="icon-btn">&#10005;</button>
-      <div class="capture-title">Incoming Inventory</div>
-      <div class="topbar-spacer"></div>
-    </header>
-
-    <div class="capture-body">
-      <div class="photo-group">
-        <div class="photo-group-header">
-          <h3>Packing Slip</h3>
+      <section class="card card-wide">
+        <h2>Registered Users</h2>
+        <div class="row" style="gap: 40px; align-items: flex-start;">
+          <div style="flex:1">
+            <h3 class="hint">Drivers / Warehouse</h3>
+            <div id="admin-driver-list" class="list">Loading…</div>
+          </div>
+          <div style="flex:1">
+            <h3 class="hint">Project Managers</h3>
+            <div id="admin-pm-list" class="list">Loading…</div>
+          </div>
         </div>
-        <p class="hint">Take a clear photo of the incoming packing slip. It will be scanned automatically.</p>
-        <div id="incoming-thumb" class="thumb-row"></div>
-        <label class="btn btn-secondary btn-full capture-btn">
-          Take Packing Slip Photo
-          <input type="file" accept="image/*" capture="environment" id="input-incoming" hidden>
-        </label>
+      </section>
+    </main>
+  </section>
+
+  <!-- Upload ticket modal -->
+  <div id="upload-modal" class="modal hidden">
+    <div class="modal-box">
+      <h3>Upload Delivery Ticket</h3>
+      <p class="hint">Job #<span id="upload-modal-job"></span></p>
+      <input type="file" id="upload-ticket-file" accept="image/*,application/pdf">
+      <div id="upload-modal-status" class="status-line"></div>
+      <div class="modal-actions">
+        <button id="btn-upload-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="btn-upload-submit" class="btn btn-primary">Upload</button>
       </div>
     </div>
+  </div>
 
-    <div id="incoming-scanning-status" class="scanning-status hidden">
-      <div class="spinner"></div>
-      <p>Reading job number&hellip;</p>
-    </div>
-  </section>
-
-  <!-- Incoming Inventory: confirm/edit the OCR'd job number -->
-  <section id="screen-incoming-confirm" class="screen hidden">
-    <header class="topbar">
-      <button id="btn-back-to-incoming-capture" class="icon-btn">&#8592;</button>
-      <div class="capture-title">Confirm Job Number</div>
-      <div class="topbar-spacer"></div>
-    </header>
-
-    <div class="capture-body">
-      <img id="confirm-thumb" class="confirm-thumb" alt="Packing slip photo">
-
-      <div id="ocr-guess-note" class="ocr-note"></div>
-
-      <label class="field-label" for="job-number-input">Job Number</label>
-      <input type="text" id="job-number-input" class="job-number-input" placeholder="Enter job number" inputmode="numeric">
-
-      <label class="field-label" for="incoming-location-select">Which warehouse is this going to?</label>
-      <select id="incoming-location-select" class="job-number-input">
-        <option value="">— Select a location —</option>
-      </select>
-
-      <button id="btn-confirm-file" class="btn btn-primary btn-huge menu-spacing">
-        Confirm &amp; File
-      </button>
-      <button id="btn-open-flag" class="btn btn-warning btn-full menu-spacing-sm">
-        Flag &mdash; No Job Number / Issue
-      </button>
-    </div>
-  </section>
-
-  <!-- Incoming Inventory: flag an issue -->
-  <section id="screen-incoming-flag" class="screen hidden">
-    <header class="topbar">
-      <button id="btn-back-to-confirm" class="icon-btn">&#8592;</button>
-      <div class="capture-title">Flag Packing Slip</div>
-      <div class="topbar-spacer"></div>
-    </header>
-
-    <div class="capture-body">
-      <img id="flag-thumb" class="confirm-thumb" alt="Packing slip photo">
-
-      <label class="field-label" for="flag-reason-select">Reason</label>
-      <select id="flag-reason-select" class="job-number-input">
-        <option value="Missing job number">Missing job number</option>
-        <option value="Job number illegible">Job number illegible</option>
-        <option value="Damaged / unreadable slip">Damaged / unreadable slip</option>
-        <option value="Other">Other</option>
-      </select>
-
-      <label class="field-label" for="flag-note-input">Note (optional)</label>
-      <textarea id="flag-note-input" class="job-number-input flag-note" placeholder="Any extra detail for the PM team"></textarea>
-
-      <p class="hint">This will email the PM team (PMteam@aes-energy.com) with this photo attached.</p>
-
-      <button id="btn-submit-flag" class="btn btn-warning btn-huge menu-spacing">
-        Send Flag to PM Team
-      </button>
-    </div>
-  </section>
-
-  <!-- Incoming Inventory: done confirmation -->
-  <section id="screen-incoming-done" class="screen hidden">
-    <div class="stamp-wrap">
-      <div id="incoming-done-stamp" class="stamp">FILED</div>
-    </div>
-    <p id="incoming-done-sub" class="stamp-sub"></p>
-    <button id="btn-incoming-done-home" class="btn btn-primary btn-full">Back to Home</button>
-  </section>
-
-  <!-- Scheduled Delivery: Start Delivery (triggers SMS + ETA) -->
-  <section id="screen-start-delivery" class="screen hidden">
-    <header class="topbar">
-      <button id="btn-start-delivery-cancel" class="icon-btn">&#10005;</button>
-      <div class="capture-title">Start Delivery</div>
-      <div class="topbar-spacer"></div>
-    </header>
-
-    <div class="capture-body">
-      <div class="photo-group">
-        <h3>Job #<span id="start-job-number"></span></h3>
-        <p class="hint">Receiver: <span id="start-receiver-name"></span></p>
-        <p class="hint">Site: <span id="start-site-address"></span></p>
+  <!-- Generate ticket modal -->
+  <div id="generate-modal" class="modal hidden">
+    <div class="modal-box modal-wide">
+      <h3>Generate Delivery Ticket</h3>
+      <p class="hint">Job #<span id="generate-modal-job"></span> &mdash; add the materials for this delivery.</p>
+      <div id="generate-line-items"></div>
+      <button id="btn-generate-add-row" class="btn btn-secondary">+ Add Item</button>
+      <div id="generate-modal-status" class="status-line"></div>
+      <div class="modal-actions">
+        <button id="btn-generate-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="btn-generate-submit" class="btn btn-primary">Generate Ticket</button>
       </div>
-
-      <div id="start-delivery-result" class="hint"></div>
     </div>
+  </div>
 
-    <div class="capture-footer">
-      <button id="btn-start-delivery-go" class="btn btn-primary btn-huge">
-        I'm Heading There Now
-      </button>
-      <button id="btn-start-delivery-continue" class="btn btn-accent btn-full menu-spacing hidden">
-        Continue to Ticket
-      </button>
-    </div>
-  </section>
-
-  <!-- Scheduled Delivery: view ticket, checkoff, photos, signature -->
-  <section id="screen-scheduled-ticket" class="screen hidden">
-    <header class="topbar">
-      <button id="btn-scheduled-cancel" class="icon-btn">&#10005;</button>
-      <div class="capture-title">Scheduled Delivery</div>
-      <div class="topbar-spacer"></div>
-    </header>
-
-    <div class="capture-body">
-      <div class="photo-group">
-        <h3>Delivery Ticket &mdash; Job #<span id="scheduled-job-number"></span></h3>
-        <img id="scheduled-ticket-image" class="confirm-thumb" alt="Delivery ticket">
-        <div id="scheduled-checkoff-items"><!-- populated by JS: per-item checkboxes, or a single overall checkbox --></div>
+  <!-- View completed delivery modal -->
+  <div id="view-modal" class="modal hidden">
+    <div class="modal-box modal-wide">
+      <h3>Delivery Details</h3>
+      <div id="view-modal-content" class="view-content"></div>
+      <div class="modal-actions">
+        <button id="btn-view-close" class="btn btn-secondary">Close</button>
       </div>
-
-      <div class="photo-group">
-        <div class="photo-group-header">
-          <span class="req-dot" data-filled="false" id="scheduled-photos-dot"></span>
-          <h3>Photos of Material (minimum 2, before leaving truck)</h3>
-        </div>
-        <div id="scheduled-photo-thumbs" class="thumb-row"></div>
-        <label class="btn btn-secondary btn-full capture-btn">
-          Take Photo
-          <input type="file" accept="image/*" capture="environment" id="input-scheduled-photo" hidden>
-        </label>
-      </div>
-
-      <div class="photo-group">
-        <h3>Receiver Signature</h3>
-        <label class="field-label" for="scheduled-signed-by-input">Signed by (name)</label>
-        <input type="text" id="scheduled-signed-by-input" class="job-number-input" placeholder="Receiver's name">
-
-        <canvas id="signature-canvas" class="signature-canvas"></canvas>
-        <button id="btn-clear-signature" class="btn btn-secondary btn-full menu-spacing-sm">Clear Signature</button>
-      </div>
-
-      <div id="scheduled-geo-status" class="hint">Getting location&hellip;</div>
     </div>
-
-    <div class="capture-footer">
-      <p id="scheduled-complete-hint" class="complete-hint">Check off the ticket, add 2+ photos, and get a signature to complete.</p>
-      <button id="btn-scheduled-complete" class="btn btn-primary btn-huge" disabled>
-        Complete &amp; Send
-      </button>
-    </div>
-  </section>
-
-  <!-- Scheduled Delivery: done -->
-  <section id="screen-scheduled-done" class="screen hidden">
-    <div class="stamp-wrap">
-      <div class="stamp">SIGNED &amp;<br>SENT</div>
-    </div>
-    <p id="scheduled-done-sub" class="stamp-sub"></p>
-    <button id="btn-scheduled-done-home" class="btn btn-primary btn-full">Back to Home</button>
-  </section>
+  </div>
 
 </div>
 
