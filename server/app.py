@@ -267,13 +267,13 @@ def process_delivery(delivery_dir, metadata, cfg):
     return job_number, target_dir
 
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def serve_app():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
-@app.route("/pm")
-@app.route("/pm/")
+@app.route("/pm", methods=["GET"])
+@app.route("/pm/", methods=["GET"])
 def serve_pm_portal():
     return send_from_directory(PM_STATIC_DIR, "index.html")
 
@@ -711,7 +711,11 @@ def incoming_flag():
 
 
 ### --- Auth --- ###
-
+@app.route("/api/auth/driver_login", methods=["POST"])
+def api_driver_login():
+    """Driver self-service login: name + code (first use registers)"""
+    return api_login()
+    
 @app.route("/api/auth/login", methods=["POST"])
 def api_login():
     """Login - proxy to auth-service and establish local session."""
