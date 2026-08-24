@@ -185,7 +185,7 @@ const ROLE_LABELS = { driver: "Driver / Warehouse", pm: "Project Manager", admin
 async function loadAdminUserList() {
   const tbody = document.getElementById("admin-user-list");
   try {
-    const result = await api("/api/auth/admin/users");
+    const result = await api("/api/auth/users");
     tbody.innerHTML = result.users.length
       ? result.users.map((u) => `<tr><td>${u.name}</td><td>${u.email}</td><td>${ROLE_LABELS[u.role] || u.role}</td></tr>`).join("")
       : '<tr><td colspan="3" class="hint">No users registered yet.</td></tr>';
