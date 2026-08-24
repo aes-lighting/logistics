@@ -35,4 +35,5 @@ EXPOSE 5000
 
 # Production WSGI server (gunicorn is already in requirements.txt).
 # 2 workers is plenty for a small fleet; raise -w if needed later.
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", "--timeout", "120", "app:app"]
+# Use PORT env var if set (Railway), otherwise default to 5000
+CMD sh -c 'gunicorn -w 2 -b 0.0.0.0:${PORT:-5000} --timeout 120 app:app'
