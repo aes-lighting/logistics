@@ -37,6 +37,10 @@ function openDB() {
 }
 
 function dbPut(record, storeName = STORE) {
+  if (!db) {
+    // IndexedDB not available; silently skip local storage
+    return Promise.resolve();
+  }
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, "readwrite");
     tx.objectStore(storeName).put(record);
@@ -46,6 +50,10 @@ function dbPut(record, storeName = STORE) {
 }
 
 function dbDelete(id, storeName = STORE) {
+  if (!db) {
+    // IndexedDB not available; silently skip local storage
+    return Promise.resolve();
+  }
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, "readwrite");
     tx.objectStore(storeName).delete(id);
@@ -55,6 +63,10 @@ function dbDelete(id, storeName = STORE) {
 }
 
 function dbGetAll(storeName = STORE) {
+  if (!db) {
+    // IndexedDB not available; return empty array
+    return Promise.resolve([]);
+  }
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, "readonly");
     const req = tx.objectStore(storeName).getAll();
@@ -1503,7 +1515,13 @@ async function uploadDelivery(delivery) {
 // ---------- Boot ----------
 
 async function boot() {
-  db = await openDB();
+  // Try to open IndexedDB, but fall back gracefully if it's unavailable (private mode, disabled, etc.)
+  try {
+    db = await openDB();
+  } catch (e) {
+    console.warn("IndexedDB unavailable (private mode, disabled, or unsupported). App will work with localStorage only.", e);
+    db = null;
+  }
   initLoginScreen();
   initHomeScreen();
   initCaptureScreen();
