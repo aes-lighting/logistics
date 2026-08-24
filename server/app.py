@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-AES Logistics - Minimal Flask Server
+AES Logistics - Auth-Service Integration Test Server
  
-Serves the driver PWA and PM portal with auth-service integration.
-This is a minimal version for testing the auth-service integration.
+Minimal Flask app that tests auth-service integration.
+No static file serving - just API endpoints.
 """
  
 import os
@@ -13,23 +13,17 @@ from datetime import datetime
 from functools import wraps
  
 from dotenv import load_dotenv
-from flask import Flask, jsonify, session, send_from_directory, request
+from flask import Flask, jsonify, session, request
 import requests
  
 load_dotenv()
  
 # ===== Configuration =====
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PARENT_DIR = os.path.dirname(BASE_DIR)
- 
 AUTH_SERVICE_URL = os.environ.get("AUTH_SERVICE_URL", "http://localhost:5000")
 FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "dev-key-change-in-production")
  
-STATIC_DIR = os.path.join(PARENT_DIR, "driver_app")
-PM_STATIC_DIR = os.path.join(PARENT_DIR, "pm_portal")
- 
 # ===== Flask Setup =====
-app = Flask(__name__, static_folder=None)
+app = Flask(__name__)
  
 app.secret_key = FLASK_SECRET_KEY
 app.config.update(
@@ -82,30 +76,26 @@ def pm_or_admin_required(f):
     return decorated_function
  
  
-# ===== Static Routes =====
+# ===== Root Routes (API Only - No Static File Serving) =====
 @app.route("/")
-def serve_app():
-    """Serve driver app."""
-    return send_from_directory(STATIC_DIR, "index.html")
- 
- 
-@app.route("/pm")
-@app.route("/pm/")
-def serve_pm_portal():
-    """Serve PM portal."""
-    return send_from_directory(PM_STATIC_DIR, "index.html")
- 
- 
-@app.route("/pm/<path:filename>")
-def serve_pm_static(filename):
-    """Serve PM portal static files."""
-    return send_from_directory(PM_STATIC_DIR, filename)
- 
- 
-@app.route("/<path:filename>")
-def serve_static(filename):
-    """Serve driver app static files."""
-    return send_from_directory(STATIC_DIR, filename)
+def root():
+    """Root endpoint - returns API info."""
+    return jsonify({
+        "service": "AES Logistics API",
+        "version": "1.0.0-minimal",
+        "auth_service": AUTH_SERVICE_URL,
+        "endpoints": {
+            "auth": {
+                "login": "POST /api/auth/login",
+                "logout": "POST /api/auth/logout",
+                "me": "GET /api/auth/me"
+            },
+            "admin": {
+                "register": "POST /api/auth/admin/register_user",
+                "users": "GET /api/auth/admin/users"
+            }
+        }
+    })
  
  
 # ===== Auth Endpoints (Proxy to Auth-Service) =====
@@ -253,7 +243,8 @@ def server_error(error):
  
 # ===== Startup =====
 if __name__ == "__main__":
-    log.info(f"Starting AES Logistics Server (Minimal)...")
+    log.info(f"Starting AES Logistics Auth-Service Test Server...")
     log.info(f"Auth Service URL: {AUTH_SERVICE_URL}")
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+ 
