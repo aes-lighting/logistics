@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy everything first
+# Copy everything
 COPY . .
 
 # Install Python dependencies
@@ -15,5 +15,6 @@ RUN pip install --no-cache-dir -r server/requirements.txt
 
 EXPOSE 5000
 
-# Run from the app directory, use full path to app module
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", "--timeout", "120", "--chdir", "/app/server", "app:app"]
+# Change to server directory and run gunicorn
+WORKDIR /app/server
+CMD exec gunicorn -w 2 -b 0.0.0.0:5000 --timeout 120 app:app
