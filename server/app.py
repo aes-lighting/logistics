@@ -29,7 +29,7 @@ app.secret_key = FLASK_SECRET_KEY
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SECURE=False,  # Set to True only when using HTTPS in production
     PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30,  # 30 days
 )
  
@@ -247,4 +247,3 @@ if __name__ == "__main__":
     log.info(f"Auth Service URL: {AUTH_SERVICE_URL}")
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
- 
