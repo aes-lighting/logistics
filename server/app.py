@@ -58,11 +58,12 @@ import shutil
 import sys
 import uuid
 from datetime import datetime
+from functools import wraps
 
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, send_from_directory, session, send_file
+import requests
 
-import auth
 import emailer
 import inventory
 import inventory_report
@@ -79,6 +80,9 @@ CONFIG_PATH = os.path.join(BASE_DIR, "server_config.json")
 STATIC_DIR = os.path.join(BASE_DIR, "..", "driver_app")
 PM_STATIC_DIR = os.path.join(BASE_DIR, "..", "pm_portal")
 
+# ===== Auth Service Configuration =====
+AUTH_SERVICE_URL = os.environ.get("AUTH_SERVICE_URL", "http://localhost:5000")
+
 app = Flask(__name__, static_folder=None)
 
 _secret_key = os.environ.get("FLASK_SECRET_KEY")
@@ -94,6 +98,7 @@ app.secret_key = _secret_key
 app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SECURE=True,
     PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30,  # 30 days
 )
 
@@ -104,7 +109,40 @@ logging.basicConfig(
 )
 log = logging.getLogger("aes_logistics")
 
-auth.seed_admin_from_env()
+
+# ===== Auth Decorators =====
+def login_required(f):
+    """Decorator to require login - checks local session."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "user_id" not in session:
+            return jsonify({"error": "not logged in"}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def admin_required(f):
+    """Decorator to require admin role."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "user_id" not in session:
+            return jsonify({"error": "not logged in"}), 401
+        if session.get("role") != "admin":
+            return jsonify({"error": "admin access required"}), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def pm_or_admin_required(f):
+    """Decorator to require PM or admin role."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if "user_id" not in session:
+            return jsonify({"error": "not logged in"}), 401
+        if session.get("role") not in ("pm", "admin"):
+            return jsonify({"error": "pm or admin access required"}), 403
+        return f(*args, **kwargs)
+    return decorated_function
 
 
 def load_config():
@@ -256,7 +294,7 @@ def health():
 
 
 @app.route("/api/upload", methods=["POST"])
-@auth.login_required
+@login_required
 def upload():
     """
     Expects multipart/form-data:
@@ -337,7 +375,7 @@ def _save_session(cfg, session_id, metadata):
 
 
 @app.route("/api/incoming/scan_page", methods=["POST"])
-@auth.login_required
+@login_required
 def api_incoming_scan_page():
     """
     Accepts one photo (field 'photo'). If 'session_id' (form field) isn't
@@ -380,15 +418,26 @@ def api_incoming_scan_page():
 
 
 @app.route("/api/inventory/pms")
-@auth.login_required
+@login_required
 def api_inventory_pms():
     """List of registered PMs, for the 'which PM owns this job' picker (only needed the first time a job is seen)."""
-    pms = [u for u in auth.list_users() if u["role"] == "pm"]
-    return jsonify({"pms": pms})
+    try:
+        resp = requests.get(
+            f"{AUTH_SERVICE_URL}/api/auth/users",
+            timeout=5
+        )
+        if resp.status_code != 200:
+            return jsonify({"error": "Failed to fetch users"}), resp.status_code
+        all_users = resp.json().get("users", [])
+        pms = [u for u in all_users if u.get("role") == "pm"]
+        return jsonify({"pms": pms})
+    except requests.exceptions.RequestException as e:
+        log.error(f"Auth service error: {e}")
+        return jsonify({"error": "Authentication service unavailable"}), 503
 
 
 @app.route("/api/incoming/confirm_job", methods=["POST"])
-@auth.login_required
+@login_required
 def api_incoming_confirm_job():
     """
     Body (JSON): { session_id, job_number, po_number, pm_email (optional), staff }
@@ -469,7 +518,7 @@ def api_incoming_confirm_job():
 
 
 @app.route("/api/incoming/pallet_photo", methods=["POST"])
-@auth.login_required
+@login_required
 def api_incoming_pallet_photo():
     """Accepts one pallet photo (field 'photo') for an in-progress session (form field 'session_id')."""
     cfg = load_config()
@@ -493,7 +542,7 @@ def api_incoming_pallet_photo():
 
 
 @app.route("/api/incoming/finalize", methods=["POST"])
-@auth.login_required
+@login_required
 def api_incoming_finalize():
     """
     Body (JSON): { session_id, pallet_count, locations: [{location, count}], comment }
@@ -578,7 +627,7 @@ def api_incoming_finalize():
 
 
 @app.route("/api/inventory/<entry_id>/qr_pdf")
-@auth.login_required
+@login_required
 def api_inventory_qr_pdf(entry_id):
     entry = inventory.get_entry(entry_id)
     if not entry or not entry.get("qr_pdf_filename"):
@@ -591,7 +640,7 @@ def api_inventory_qr_pdf(entry_id):
 
 
 @app.route("/api/inventory/<entry_id>")
-@auth.login_required
+@login_required
 def api_inventory_detail(entry_id):
     entry = inventory.get_entry(entry_id)
     if not entry:
@@ -600,7 +649,7 @@ def api_inventory_detail(entry_id):
 
 
 @app.route("/api/incoming/flag", methods=["POST"])
-@auth.login_required
+@login_required
 def incoming_flag():
     """
     Body (JSON): { session_id, reason, note (optional), staff (optional) }
@@ -665,51 +714,134 @@ def incoming_flag():
 
 @app.route("/api/auth/login", methods=["POST"])
 def api_login():
+    """Login - proxy to auth-service and establish local session."""
     data = request.get_json(silent=True) or {}
-    status, body = auth.login(data.get("email"), data.get("password"))
-    if status == 200:
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+
+    if not email or not password:
+        return jsonify({"error": "Email and password required"}), 400
+
+    try:
+        # Call auth-service
+        resp = requests.post(
+            f"{AUTH_SERVICE_URL}/api/auth/login",
+            json={"email": email, "password": password},
+            timeout=5
+        )
+
+        if resp.status_code != 200:
+            return jsonify({"error": "Invalid email or password"}), 401
+
+        user_data = resp.json()
+
+        # Establish local session
+        session["user_id"] = user_data.get("user_id")
+        session["email"] = user_data.get("email")
+        session["name"] = user_data.get("name")
+        session["role"] = user_data.get("role")
         session.permanent = True
-    return jsonify(body), status
+
+        log.info(f"User logged in: {email} ({user_data.get('role')})")
+
+        return jsonify({
+            "user_id": user_data.get("user_id"),
+            "email": user_data.get("email"),
+            "name": user_data.get("name"),
+            "role": user_data.get("role")
+        }), 200
+
+    except requests.exceptions.RequestException as e:
+        log.error(f"Auth service error: {e}")
+        return jsonify({"error": "Authentication service unavailable"}), 503
 
 
 @app.route("/api/auth/logout", methods=["POST"])
 def api_logout():
+    """Logout - clear local session."""
+    email = session.get("email", "unknown")
     session.clear()
+    log.info(f"User logged out: {email}")
     return jsonify({"status": "ok"})
 
 
 @app.route("/api/auth/me")
 def api_me():
-    identity = auth.current_session()
-    if not identity:
+    """Get current user from local session."""
+    if "user_id" not in session:
         return jsonify({"error": "not logged in"}), 401
-    return jsonify(identity)
+
+    return jsonify({
+        "user_id": session.get("user_id"),
+        "email": session.get("email"),
+        "name": session.get("name"),
+        "role": session.get("role")
+    })
 
 
 @app.route("/api/auth/admin/register_user", methods=["POST"])
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_admin_register_user():
+    """Register new user (Admin/PM only)."""
     data = request.get_json(silent=True) or {}
-    status, body = auth.register_user(data.get("name"), data.get("email"), data.get("role"))
-    return jsonify(body), status
+
+    try:
+        # Call auth-service to register user
+        resp = requests.post(
+            f"{AUTH_SERVICE_URL}/api/auth/register",
+            json={
+                "name": data.get("name"),
+                "email": data.get("email"),
+                "password": data.get("password"),
+                "role": data.get("role", "driver")
+            },
+            timeout=5
+        )
+
+        if resp.status_code not in (200, 201):
+            error_data = resp.json() if resp.text else {}
+            return jsonify({"error": error_data.get("error", "Failed to register user")}), resp.status_code
+
+        user_data = resp.json()
+        log.info(f"User registered: {data.get('email')}")
+        return jsonify(user_data), resp.status_code
+
+    except requests.exceptions.RequestException as e:
+        log.error(f"Auth service error: {e}")
+        return jsonify({"error": "Authentication service unavailable"}), 503
 
 
 @app.route("/api/auth/admin/users")
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_admin_list_users():
-    return jsonify({"users": auth.list_users()})
+    """List all users (PM or Admin only)."""
+    try:
+        resp = requests.get(
+            f"{AUTH_SERVICE_URL}/api/auth/users",
+            timeout=5
+        )
+
+        if resp.status_code != 200:
+            return jsonify({"error": "Failed to fetch users"}), resp.status_code
+
+        data = resp.json()
+        return jsonify({"users": data.get("users", [])})
+
+    except requests.exceptions.RequestException as e:
+        log.error(f"Auth service error: {e}")
+        return jsonify({"error": "Authentication service unavailable"}), 503
 
 
 ### --- Scheduled Delivery flow --- ###
 
 @app.route("/api/schedule/calendar/settings", methods=["GET"])
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_get_calendar_settings():
     return jsonify({"ics_url": scheduling.get_ics_url()})
 
 
 @app.route("/api/schedule/calendar/settings", methods=["POST"])
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_set_calendar_settings():
     data = request.get_json(silent=True) or {}
     scheduling.set_ics_url(data.get("ics_url"))
@@ -717,7 +849,7 @@ def api_set_calendar_settings():
 
 
 @app.route("/api/schedule/calendar/upcoming")
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_calendar_upcoming():
     events = scheduling.fetch_upcoming_events()
     linked = scheduling.linked_event_uids()
@@ -727,13 +859,13 @@ def api_calendar_upcoming():
 
 
 @app.route("/api/schedule", methods=["GET"])
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_list_schedule():
     return jsonify({"deliveries": scheduling.list_deliveries()})
 
 
 @app.route("/api/schedule", methods=["POST"])
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_create_schedule():
     data = request.get_json(silent=True) or {}
     required = ["job_number", "delivery_date", "receiver_name", "receiver_email", "pm_email"]
@@ -760,15 +892,26 @@ def api_create_schedule():
 
 
 @app.route("/api/schedule/drivers")
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_schedule_drivers():
     """List of registered driver/warehouse names, for the PM portal's assignment dropdown."""
-    drivers = [u for u in auth.list_users() if u["role"] == "driver"]
-    return jsonify({"drivers": drivers})
+    try:
+        resp = requests.get(
+            f"{AUTH_SERVICE_URL}/api/auth/users",
+            timeout=5
+        )
+        if resp.status_code != 200:
+            return jsonify({"error": "Failed to fetch users"}), resp.status_code
+        all_users = resp.json().get("users", [])
+        drivers = [u for u in all_users if u.get("role") == "driver"]
+        return jsonify({"drivers": drivers})
+    except requests.exceptions.RequestException as e:
+        log.error(f"Auth service error: {e}")
+        return jsonify({"error": "Authentication service unavailable"}), 503
 
 
 @app.route("/api/schedule/<delivery_id>/ticket", methods=["POST"])
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_upload_ticket(delivery_id):
     file_obj = request.files.get("ticket")
     if file_obj is None:
@@ -781,7 +924,7 @@ def api_upload_ticket(delivery_id):
 
 
 @app.route("/api/schedule/<delivery_id>/generate_ticket", methods=["POST"])
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_generate_ticket(delivery_id):
     """PM fills in line items; server renders a ticket image from the delivery's
     existing job/receiver info plus these items, and files it exactly like an
@@ -795,7 +938,7 @@ def api_generate_ticket(delivery_id):
     if not isinstance(line_items, list) or not all(isinstance(i, dict) for i in line_items):
         return jsonify({"error": "line_items must be a list of {description, quantity, ...} objects"}), 400
 
-    pm_name = auth.current_session().get("name") or session.get("email", "")
+    pm_name = session.get("name") or session.get("email", "")
 
     image_bytes = ticket_render.render_ticket_image(
         job_number=delivery["job_number"],
@@ -816,7 +959,7 @@ def api_generate_ticket(delivery_id):
 
 
 @app.route("/api/schedule/<delivery_id>/revise_ticket", methods=["POST"])
-@auth.login_required
+@login_required
 def api_revise_ticket(delivery_id):
     """
     Edits an existing ticket's line items/header fields and regenerates it.
@@ -862,7 +1005,7 @@ def api_revise_ticket(delivery_id):
         return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
 
     ticket_path = scheduling.ticket_file_path(delivery_id)
-    revised_by = auth.current_session().get("name") or session.get("email", "")
+    revised_by = session.get("name") or session.get("email", "")
     subject = f"[AES Logistics] Delivery ticket REVISED — Job #{record['job_number']}"
 
     stage_note = ""
@@ -896,7 +1039,7 @@ def api_revise_ticket(delivery_id):
 
 
 @app.route("/api/schedule/<delivery_id>/send_to_pm", methods=["POST"])
-@auth.login_required
+@login_required
 def api_send_to_pm(delivery_id):
     """Manually emails a copy of the current ticket to any chosen PM — independent of who's already assigned to the job."""
     delivery = scheduling.get_delivery(delivery_id)
@@ -911,7 +1054,7 @@ def api_send_to_pm(delivery_id):
         return jsonify({"error": "missing 'pm_email'"}), 400
 
     ticket_path = scheduling.ticket_file_path(delivery_id)
-    sender = auth.current_session().get("name") or session.get("email", "")
+    sender = session.get("name") or session.get("email", "")
     subject = f"[AES Logistics] Delivery ticket — Job #{delivery['job_number']}"
     body = (
         f"A copy of the delivery ticket for Job #{delivery['job_number']} was sent to you.\n\n"
@@ -927,7 +1070,7 @@ def api_send_to_pm(delivery_id):
 
 
 @app.route("/api/schedule/<delivery_id>/file/<filename>")
-@auth.login_required
+@login_required
 def api_schedule_file(delivery_id, filename):
     path = scheduling.delivery_file_path(delivery_id, filename)
     if not os.path.isfile(path):
@@ -936,14 +1079,14 @@ def api_schedule_file(delivery_id, filename):
 
 
 @app.route("/api/schedule/warehouse/ready_to_pack")
-@auth.login_required
+@login_required
 def api_schedule_ready_to_pack():
     """Outgoing Inventory queue: tickets that exist but haven't been packed/signed yet."""
     return jsonify({"deliveries": scheduling.deliveries_ready_to_pack()})
 
 
 @app.route("/api/schedule/<delivery_id>/pack", methods=["POST"])
-@auth.login_required
+@login_required
 def api_schedule_pack(delivery_id):
     """
     Warehouse's outgoing-inventory step. If the delivery has line items,
@@ -994,13 +1137,13 @@ def api_schedule_pack(delivery_id):
 
 
 @app.route("/api/schedule/driver/today")
-@auth.login_required
+@login_required
 def api_schedule_driver_today():
     return jsonify({"deliveries": scheduling.deliveries_ready_for_driver()})
 
 
 @app.route("/api/schedule/driver/mine")
-@auth.login_required
+@login_required
 def api_schedule_driver_mine():
     """A driver's full assigned list — not just today's — for the 'My Deliveries' menu."""
     driver_name = session.get("name")
@@ -1008,7 +1151,7 @@ def api_schedule_driver_mine():
 
 
 @app.route("/api/schedule/<delivery_id>/start", methods=["POST"])
-@auth.login_required
+@login_required
 def api_schedule_start(delivery_id):
     """
     Driver taps 'Start This Delivery'. Computes an ETA (best-effort) and
@@ -1051,7 +1194,7 @@ def api_schedule_start(delivery_id):
 
 
 @app.route("/api/schedule/<delivery_id>/complete", methods=["POST"])
-@auth.login_required
+@login_required
 def api_schedule_complete(delivery_id):
     delivery = scheduling.get_delivery(delivery_id)
     if not delivery:
@@ -1137,19 +1280,19 @@ def api_schedule_complete(delivery_id):
 ### --- Inventory (location tracking + Excel report) --- ###
 
 @app.route("/api/inventory/locations")
-@auth.login_required
+@login_required
 def api_inventory_locations():
     return jsonify({"locations": inventory.LOCATIONS})
 
 
 @app.route("/api/inventory")
-@auth.login_required
+@login_required
 def api_inventory_list():
     return jsonify({"entries": inventory.list_entries()})
 
 
 @app.route("/api/inventory/<entry_id>/remove", methods=["POST"])
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_inventory_remove(entry_id):
     """Manual removal — a safety valve for partial shipments or corrections
     that the automatic job-number-based removal (on packing) can't handle."""
@@ -1160,7 +1303,7 @@ def api_inventory_remove(entry_id):
 
 
 @app.route("/api/inventory/export")
-@auth.pm_or_admin_required
+@pm_or_admin_required
 def api_inventory_export():
     report_bytes = inventory_report.build_report()
     filename = f"AES_Inventory_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
