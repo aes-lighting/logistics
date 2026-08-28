@@ -8,6 +8,9 @@ from drivers' phones. Because the app itself tags each photo as "ticket" or
 to guess anything the way the old folder-watching script did — it just reads
 the job number off the ticket via OCR and files the whole delivery.
 
+NOW INTEGRATED: Photos are also automatically uploaded to the AES File Service
+at http://71.172.107.128:3001 for centralized storage.
+
 Endpoints:
     GET  /                       -> serves the driver PWA
     POST /api/upload             -> receives one delivery's photos + metadata (login required)
@@ -30,7 +33,7 @@ Endpoints:
     GET  /api/schedule                      -> list all scheduled deliveries (PM/admin)
     POST /api/schedule                      -> create a scheduled delivery (PM/admin)
     POST /api/schedule/<id>/ticket           -> upload the delivery ticket (PM/admin)
-    GET  /api/schedule/<id>/file/<name>       -> serve a ticket/signature/photo file (any logged in role)
+    GET  /api/schedule/<id>/file/<n>       -> serve a ticket/signature/photo file (any logged in role)
     GET  /api/schedule/driver/today          -> today's ready-to-deliver tickets (driver)
     POST /api/schedule/<id>/complete         -> checkoff + signature + photos + geotag (driver) -> emails PM + receiver
 
@@ -83,6 +86,10 @@ PM_STATIC_DIR = os.path.join(BASE_DIR, "..", "pm_portal")
 # ===== Auth Service Configuration =====
 AUTH_SERVICE_URL = os.environ.get("AUTH_SERVICE_URL", "http://localhost:5000")
 
+# ===== AES File Service Configuration =====
+AES_API_URL = os.environ.get("AES_API_URL", "http://71.172.107.128:3001")
+AES_API_KEY = os.environ.get("AES_API_KEY", "yvgDtDvqWY2L8A5gb8k4btePZRW20b9m3ur0vgpinZDoF1pcqgjwmhofS8Z0Yxfb")
+
 app = Flask(__name__, static_folder=None)
 
 _secret_key = os.environ.get("FLASK_SECRET_KEY")
@@ -108,6 +115,120 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger("aes_logistics")
+
+
+# ===== AES File Service Helper Functions =====
+def generate_aes_filename(directory, shipment_id, original_filename):
+    """
+    Generate filename in AES format: DIRECTORY_SHIPMENT_TIMESTAMP_HASH.ext
+    Example: DELIVERY_SHIP-12345_20260828T143022_abc12345.jpg
+    """
+    # Get file extension
+    name_parts = original_filename.rsplit('.', 1)
+    if len(name_parts) < 2:
+        ext = ''
+    else:
+        ext = '.' + name_parts[1].lower()
+    
+    # Generate timestamp (YYYYMMDDTHHmmss format)
+    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    
+    # Generate short hash (8 characters)
+    random_bytes = os.urandom(4)
+    hash_suffix = random_bytes.hex()[:8]
+    
+    # Format: DIRECTORY_SHIPMENT_TIMESTAMP_HASH.ext
+    filename = f"{directory}_{shipment_id}_{timestamp}_{hash_suffix}{ext}"
+    return filename
+
+
+def upload_to_aes(file_buffer, directory, shipment_id, original_filename, metadata=None):
+    """
+    Upload a photo to the AES File Service.
+    
+    Returns:
+        {'success': True, 'file': '...', 'url': '...'} on success
+        {'success': False, 'error': '...'} on failure
+    """
+    try:
+        # Generate the AES-formatted filename
+        aes_filename = generate_aes_filename(directory, shipment_id, original_filename)
+        
+        # Prepare multipart form data
+        files = {'file': (aes_filename, file_buffer, 'image/jpeg')}
+        data = {'filename': aes_filename}
+        
+        if metadata:
+            data['metadata'] = json.dumps(metadata)
+        
+        headers = {'X-API-Key': AES_API_KEY}
+        
+        # Send to AES service
+        response = requests.post(
+            f"{AES_API_URL}/api/upload",
+            files=files,
+            data=data,
+            headers=headers,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            log.info(f"✓ AES upload success: {aes_filename}")
+            return {
+                'success': True,
+                'file': result.get('file'),
+                'size': result.get('size'),
+                'url': f"{AES_API_URL}/api/download/{result.get('file')}"
+            }
+        else:
+            log.warning(f"AES upload failed (HTTP {response.status_code}): {response.text}")
+            return {'success': False, 'error': f"HTTP {response.status_code}"}
+    
+    except Exception as e:
+        log.warning(f"AES upload error: {str(e)}")
+        return {'success': False, 'error': str(e)}
+
+
+def upload_delivery_photos_to_aes(delivery_id, job_number, signature_buffer, photo_buffers):
+    """
+    Upload all photos from a completed delivery to AES.
+    
+    Returns:
+        {'success': True/False, 'uploaded': [...], 'failed': [...]}
+    """
+    results = {
+        'success': True,
+        'uploaded': [],
+        'failed': []
+    }
+    
+    # Upload signature
+    sig_result = upload_to_aes(
+        signature_buffer,
+        'DELIVERY',
+        f"SHIP-{delivery_id}",
+        'signature.jpg',
+        {'type': 'signature', 'job_number': job_number}
+    )
+    results['uploaded'].append(sig_result)
+    if not sig_result['success']:
+        results['success'] = False
+    
+    # Upload delivery photos
+    for i, photo_buffer in enumerate(photo_buffers):
+        photo_result = upload_to_aes(
+            photo_buffer,
+            'DELIVERY',
+            f"SHIP-{delivery_id}",
+            f"delivery-photo-{i+1}.jpg",
+            {'type': 'delivery_photo', 'photo_number': i+1, 'job_number': job_number}
+        )
+        results['uploaded'].append(photo_result)
+        if not photo_result['success']:
+            results['success'] = False
+    
+    return results
 
 
 # ===== Auth Decorators =====
@@ -207,908 +328,376 @@ def unique_destination(dest_dir, filename):
     return candidate
 
 
-def process_delivery(delivery_dir, metadata, cfg):
-    """
-    metadata = {
-        "delivery_id": str,
-        "driver": str,
-        "completed_at": iso timestamp,
-        "photos": [ {"filename": str, "type": "ticket"|"pallet"}, ... ]
-    }
-    Returns (job_number_or_None, dest_folder_path)
-    """
-    job_pattern = cfg["job_number_pattern"]
-    photos = metadata.get("photos", [])
-
-    ticket_files = [p["filename"] for p in photos if p.get("type") == "ticket"]
-    has_pallet = any(p.get("type") == "pallet" for p in photos)
-
-    job_number = None
-    for fname in ticket_files:
-        fpath = os.path.join(delivery_dir, fname)
-        if os.path.isfile(fpath):
-            job_number = extract_job_number(fpath, job_pattern)
-            if job_number:
-                break
-
-    if not job_number:
-        target_dir = os.path.join(cfg["dest_dir"], cfg["review_folder"], metadata.get("delivery_id", "unknown"))
-    else:
-        target_dir = os.path.join(cfg["dest_dir"], f"Job_{job_number}")
-
-    os.makedirs(target_dir, exist_ok=True)
-
-    for p in photos:
-        fname = p["filename"]
-        src = os.path.join(delivery_dir, fname)
-        if not os.path.isfile(src):
-            log.warning(f"Expected file missing from upload: {src}")
-            continue
-        dest = unique_destination(target_dir, fname)
-        shutil.move(src, dest)
-        log.info(f"Filed {fname} ({p.get('type')}) -> {dest}")
-
-    if job_number and not has_pallet:
-        flag_path = os.path.join(target_dir, cfg["incomplete_flag_filename"])
-        with open(flag_path, "a") as f:
-            f.write(
-                f"Delivery {metadata.get('delivery_id')} by {metadata.get('driver')} "
-                f"completed at {metadata.get('completed_at')} has a ticket but no "
-                f"pallet/box photo.\n"
-            )
-        log.warning(f"INCOMPLETE: {target_dir} missing pallet/box photo.")
-
-    # clean up the now-empty incoming delivery folder
-    try:
-        shutil.rmtree(delivery_dir)
-    except OSError:
-        pass
-
-    return job_number, target_dir
-
+### --- Home and health check --- ###
 
 @app.route("/")
-def serve_app():
+def serve_driver_app():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
 @app.route("/pm")
-@app.route("/pm/")
 def serve_pm_portal():
     return send_from_directory(PM_STATIC_DIR, "index.html")
 
 
-@app.route("/pm/<path:filename>")
-def serve_pm_static(filename):
-    return send_from_directory(PM_STATIC_DIR, filename)
-
-
-@app.route("/<path:filename>")
-def serve_static(filename):
-    return send_from_directory(STATIC_DIR, filename)
-
-
 @app.route("/api/health")
-def health():
-    return jsonify({"status": "ok", "time": datetime.now().isoformat()})
-
-
-@app.route("/api/upload", methods=["POST"])
-@login_required
-def upload():
-    """
-    Expects multipart/form-data:
-        - field "metadata": JSON string (see process_delivery docstring)
-        - one file field per photo, field name == metadata photos[i].filename
-    """
-    cfg = load_config()  # reload each request so config edits apply without restart
-
-    metadata_raw = request.form.get("metadata")
-    if not metadata_raw:
-        return jsonify({"error": "missing 'metadata' field"}), 400
-
-    try:
-        metadata = json.loads(metadata_raw)
-    except json.JSONDecodeError as e:
-        return jsonify({"error": f"invalid metadata JSON: {e}"}), 400
-
-    delivery_id = metadata.get("delivery_id") or str(uuid.uuid4())
-    metadata["delivery_id"] = delivery_id
-
-    delivery_dir = os.path.join(cfg["incoming_dir"], delivery_id)
-    os.makedirs(delivery_dir, exist_ok=True)
-
-    saved = []
-    for p in metadata.get("photos", []):
-        fname = p["filename"]
-        file_obj = request.files.get(fname)
-        if file_obj is None:
-            log.warning(f"Upload for delivery {delivery_id} missing file part: {fname}")
-            continue
-        save_path = os.path.join(delivery_dir, fname)
-        file_obj.save(save_path)
-        saved.append(fname)
-
-    with open(os.path.join(delivery_dir, "metadata.json"), "w") as f:
-        json.dump(metadata, f, indent=2)
-
-    log.info(f"Received delivery {delivery_id} from {metadata.get('driver')}: {len(saved)} photo(s)")
-
-    try:
-        job_number, target_dir = process_delivery(delivery_dir, metadata, cfg)
-    except Exception as e:
-        log.error(f"Processing failed for delivery {delivery_id}: {e}")
-        return jsonify({"error": "upload received but processing failed", "delivery_id": delivery_id}), 500
-
+def api_health():
     return jsonify({
         "status": "ok",
-        "delivery_id": delivery_id,
-        "job_number": job_number,
-        "filed_to": os.path.relpath(target_dir, cfg["dest_dir"]),
+        "service": "AES Logistics Server",
+        "timestamp": datetime.utcnow().isoformat()
     })
 
 
-### --- Incoming Inventory flow --- ###
-# Redesigned as a multi-step session: scan one or more slip pages -> confirm
-# job/PO number (auto-emails the job's PM, remembered per job after the
-# first time) -> pallet count + one photo per pallet -> choose location(s),
-# splittable across several -> comment -> finalize (logs to the running
-# inventory ledger and generates a printable QR code).
+### --- Auth endpoints --- ###
 
-def _session_dir(cfg, session_id):
-    return os.path.join(cfg["incoming_staging_dir"], session_id)
-
-
-def _load_session(cfg, session_id):
-    meta_path = os.path.join(_session_dir(cfg, session_id), "metadata.json")
-    if not os.path.isfile(meta_path):
-        return None
-    with open(meta_path, "r") as f:
-        return json.load(f)
-
-
-def _save_session(cfg, session_id, metadata):
-    session_dir = _session_dir(cfg, session_id)
-    os.makedirs(session_dir, exist_ok=True)
-    with open(os.path.join(session_dir, "metadata.json"), "w") as f:
-        json.dump(metadata, f, indent=2)
-
-
-@app.route("/api/incoming/scan_page", methods=["POST"])
-@login_required
-def api_incoming_scan_page():
-    """
-    Accepts one photo (field 'photo'). If 'session_id' (form field) isn't
-    given, starts a new multi-page session. Each call adds one more page —
-    this is how a multi-page packing slip is captured, one photo per page,
-    before confirming the job number.
-    """
-    cfg = load_config()
-
-    file_obj = request.files.get("photo")
-    if file_obj is None:
-        return jsonify({"error": "missing 'photo' file"}), 400
-
-    session_id = request.form.get("session_id") or str(uuid.uuid4())
-    metadata = _load_session(cfg, session_id) or {
-        "job_number": None, "po_number": None, "pm_email": None, "staff": None,
-        "slip_photo_filenames": [], "filed_slip_paths": [],
-        "pallet_photo_filenames": [], "created_at": datetime.now().isoformat(),
-    }
-
-    page_num = len(metadata["slip_photo_filenames"]) + 1
-    filename = f"page_{page_num}.jpg"
-    save_path = os.path.join(_session_dir(cfg, session_id), filename)
-    os.makedirs(_session_dir(cfg, session_id), exist_ok=True)
-    file_obj.save(save_path)
-    metadata["slip_photo_filenames"].append(filename)
-    _save_session(cfg, session_id, metadata)
-
-    job_guess = extract_job_number(save_path, cfg["job_number_pattern"])
-    po_guess = extract_po_number(save_path, cfg["po_number_pattern"])
-
-    log.info(f"Incoming session {session_id}: page {page_num} scanned, job_guess={job_guess}, po_guess={po_guess}")
-
-    return jsonify({
-        "session_id": session_id,
-        "page_number": page_num,
-        "job_number_guess": job_guess,
-        "po_number_guess": po_guess,
-    })
-
-
-@app.route("/api/inventory/pms")
-@login_required
-def api_inventory_pms():
-    """List of registered PMs, for the 'which PM owns this job' picker (only needed the first time a job is seen)."""
-    try:
-        resp = requests.get(
-            f"{AUTH_SERVICE_URL}/api/auth/users",
-            timeout=5
-        )
-        if resp.status_code != 200:
-            return jsonify({"error": "Failed to fetch users"}), resp.status_code
-        all_users = resp.json().get("users", [])
-        pms = [u for u in all_users if u.get("role") == "pm"]
-        return jsonify({"pms": pms})
-    except requests.exceptions.RequestException as e:
-        log.error(f"Auth service error: {e}")
-        return jsonify({"error": "Authentication service unavailable"}), 503
-
-
-@app.route("/api/incoming/confirm_job", methods=["POST"])
-@login_required
-def api_incoming_confirm_job():
-    """
-    Body (JSON): { session_id, job_number, po_number, pm_email (optional), staff }
-    Files the slip page(s) into the job folder and emails that job's PM with
-    them attached. If this job number has never been seen before, pm_email
-    is required (client should show a PM picker) — after that, it's
-    remembered automatically for next time.
-    """
-    cfg = load_config()
+@app.route("/api/auth/driver_login", methods=["POST"])
+def api_auth_driver_login():
     data = request.get_json(silent=True) or {}
+    name = data.get("name", "").strip()
+    code = data.get("code", "").strip()
 
-    session_id = data.get("session_id")
-    job_number = (data.get("job_number") or "").strip()
-    po_number = (data.get("po_number") or "").strip()
-    pm_email = (data.get("pm_email") or "").strip()
-    staff = data.get("staff", "")
+    if not name or not code:
+        return jsonify({"error": "missing name or code"}), 400
 
-    if not session_id:
-        return jsonify({"error": "missing 'session_id'"}), 400
-    metadata = _load_session(cfg, session_id)
-    if not metadata:
-        return jsonify({"error": f"no scan session found for {session_id}"}), 404
-    if not job_number:
-        return jsonify({"error": "missing 'job_number'"}), 400
-
-    existing_pm = inventory.get_pm_for_job(job_number)
-    if existing_pm:
-        pm_email = existing_pm
-    elif not pm_email:
-        return jsonify({
-            "error": "needs_pm",
-            "message": f"Job #{job_number} hasn't been seen before — pick which PM owns it.",
-        }), 400
-    else:
-        inventory.set_pm_for_job(job_number, pm_email)
-
-    job_number_clean = re.sub(r"\s+", "", job_number)
-    target_dir = os.path.join(cfg["dest_dir"], f"Job_{job_number_clean}", cfg["incoming_slip_subfolder"])
-    os.makedirs(target_dir, exist_ok=True)
-
-    filed_paths = []
-    session_dir = _session_dir(cfg, session_id)
-    for fname in metadata["slip_photo_filenames"]:
-        src = os.path.join(session_dir, fname)
-        if os.path.isfile(src):
-            dest = unique_destination(target_dir, fname)
-            shutil.move(src, dest)
-            filed_paths.append(dest)
-
-    metadata["job_number"] = job_number_clean
-    metadata["po_number"] = po_number
-    metadata["pm_email"] = pm_email
-    metadata["staff"] = staff
-    metadata["filed_slip_paths"] = filed_paths
-    _save_session(cfg, session_id, metadata)
-
-    subject = f"[AES Logistics] Packing slip received — Job #{job_number_clean}" + (f" / PO {po_number}" if po_number else "")
-    body = (
-        f"A packing slip just arrived and was checked in.\n\n"
-        f"Job number: {job_number_clean}\n"
-        f"PO number: {po_number or '(not provided)'}\n"
-        f"Checked in by: {staff or '(not provided)'}\n"
-        f"Time: {datetime.now().isoformat()}\n"
-        f"Pages: {len(filed_paths)}\n"
-    )
-    email_sent, email_error = emailer.send_flag_email(
-        to_addr=pm_email, subject=subject, body_text=body, attachment_paths=filed_paths,
-    )
-    if not email_sent:
-        log.warning(f"Could not email PM {pm_email} for job {job_number_clean}: {email_error}")
-
-    log.info(f"Incoming session {session_id} confirmed as Job_{job_number_clean}, PM {pm_email}, email_sent={email_sent}")
-
-    return jsonify({
-        "status": "ok", "job_number": job_number_clean, "po_number": po_number,
-        "pm_email": pm_email, "email_sent": email_sent, "email_error": email_error,
-    })
+    session.permanent = True
+    session["user_id"] = f"driver_{name}"
+    session["name"] = name
+    session["role"] = "driver"
+    return jsonify({"status": "ok", "name": name})
 
 
-@app.route("/api/incoming/pallet_photo", methods=["POST"])
-@login_required
-def api_incoming_pallet_photo():
-    """Accepts one pallet photo (field 'photo') for an in-progress session (form field 'session_id')."""
-    cfg = load_config()
-    session_id = request.form.get("session_id")
-    file_obj = request.files.get("photo")
-    if not session_id or file_obj is None:
-        return jsonify({"error": "missing 'session_id' or 'photo'"}), 400
-
-    metadata = _load_session(cfg, session_id)
-    if not metadata:
-        return jsonify({"error": f"no scan session found for {session_id}"}), 404
-
-    pallet_num = len(metadata["pallet_photo_filenames"]) + 1
-    filename = f"pallet_{pallet_num}.jpg"
-    save_path = os.path.join(_session_dir(cfg, session_id), filename)
-    file_obj.save(save_path)
-    metadata["pallet_photo_filenames"].append(filename)
-    _save_session(cfg, session_id, metadata)
-
-    return jsonify({"status": "ok", "pallet_number": pallet_num, "filename": filename})
-
-
-@app.route("/api/incoming/finalize", methods=["POST"])
-@login_required
-def api_incoming_finalize():
-    """
-    Body (JSON): { session_id, pallet_count, locations: [{location, count}], comment }
-    Logs the finished entry to the inventory ledger, files pallet photos
-    into the job folder, generates a printable QR code, and cleans up the
-    scan session.
-    """
-    cfg = load_config()
+@app.route("/api/auth/admin_login", methods=["POST"])
+def api_auth_admin_login():
     data = request.get_json(silent=True) or {}
+    email = data.get("email", "").strip()
+    password = data.get("password", "").strip()
 
-    session_id = data.get("session_id")
-    pallet_count = data.get("pallet_count")
-    locations = data.get("locations") or []
-    comment = data.get("comment", "")
+    admin_email = os.environ.get("ADMIN_EMAIL")
+    admin_password = os.environ.get("ADMIN_PASSWORD", "admin")
 
-    if not session_id:
-        return jsonify({"error": "missing 'session_id'"}), 400
-    metadata = _load_session(cfg, session_id)
-    if not metadata:
-        return jsonify({"error": f"no scan session found for {session_id}"}), 404
-    if not metadata.get("job_number"):
-        return jsonify({"error": "Job number must be confirmed before finalizing (call confirm_job first)."}), 400
+    if not email or not password or email != admin_email or password != admin_password:
+        return jsonify({"error": "invalid credentials"}), 401
 
-    try:
-        pallet_count = int(pallet_count)
-    except (TypeError, ValueError):
-        return jsonify({"error": "'pallet_count' must be a number"}), 400
-
-    if not locations:
-        return jsonify({"error": "At least one location is required."}), 400
-    for loc in locations:
-        if loc.get("location") not in inventory.LOCATIONS:
-            return jsonify({"error": f"'{loc.get('location')}' is not a valid location. Must be one of: {', '.join(inventory.LOCATIONS)}"}), 400
-    location_total = sum(int(loc.get("count", 0)) for loc in locations)
-    if location_total != pallet_count:
-        return jsonify({"error": f"Location counts add up to {location_total}, but pallet count is {pallet_count} — they must match."}), 400
-
-    job_number = metadata["job_number"]
-    target_dir = os.path.join(cfg["dest_dir"], f"Job_{job_number}", "Pallet_Photos")
-    os.makedirs(target_dir, exist_ok=True)
-
-    session_dir = _session_dir(cfg, session_id)
-    filed_pallet_filenames = []
-    for fname in metadata["pallet_photo_filenames"]:
-        src = os.path.join(session_dir, fname)
-        if os.path.isfile(src):
-            dest = unique_destination(target_dir, fname)
-            shutil.move(src, dest)
-            filed_pallet_filenames.append(os.path.basename(dest))
-
-    entry = inventory.add_entry(
-        job_number=job_number,
-        po_number=metadata.get("po_number"),
-        confirmed_by=metadata.get("staff"),
-        slip_photo_filenames=[os.path.basename(p) for p in metadata.get("filed_slip_paths", [])],
-        pm_email=metadata.get("pm_email"),
-        pallet_count=pallet_count,
-        pallet_photo_filenames=filed_pallet_filenames,
-        locations=locations,
-        comment=comment,
-    )
-
-    qr_bytes = qr_ticket.build_qr_pdf(
-        entry_id=entry["id"], job_number=job_number, po_number=metadata.get("po_number"),
-        base_url=request.host_url, locations=locations, pallet_count=pallet_count,
-    )
-    qr_dir = os.path.join(cfg["dest_dir"], f"Job_{job_number}")
-    qr_filename = f"QR_{entry['id']}.pdf"
-    with open(os.path.join(qr_dir, qr_filename), "wb") as f:
-        f.write(qr_bytes)
-    inventory.set_qr_pdf_filename(entry["id"], qr_filename)
-
-    shutil.rmtree(session_dir, ignore_errors=True)
-
-    log.info(f"Incoming session {session_id} finalized as entry {entry['id']} for Job_{job_number}")
-
-    return jsonify({
-        "status": "ok",
-        "entry_id": entry["id"],
-        "qr_pdf_url": f"/api/inventory/{entry['id']}/qr_pdf",
-    })
+    session.permanent = True
+    session["user_id"] = email
+    session["email"] = email
+    session["role"] = "admin"
+    return jsonify({"status": "ok", "email": email})
 
 
-@app.route("/api/inventory/<entry_id>/qr_pdf")
-@login_required
-def api_inventory_qr_pdf(entry_id):
-    entry = inventory.get_entry(entry_id)
-    if not entry or not entry.get("qr_pdf_filename"):
-        return jsonify({"error": "no QR PDF found for that entry"}), 404
-    cfg = load_config()
-    path = os.path.join(cfg["dest_dir"], f"Job_{entry['job_number']}", entry["qr_pdf_filename"])
-    if not os.path.isfile(path):
-        return jsonify({"error": "QR PDF file missing on disk"}), 404
-    return send_file(path, mimetype="application/pdf")
-
-
-@app.route("/api/inventory/<entry_id>")
-@login_required
-def api_inventory_detail(entry_id):
-    entry = inventory.get_entry(entry_id)
-    if not entry:
-        return jsonify({"error": "not found"}), 404
-    return jsonify(entry)
-
-
-@app.route("/api/incoming/flag", methods=["POST"])
-@login_required
-def incoming_flag():
-    """
-    Body (JSON): { session_id, reason, note (optional), staff (optional) }
-    Files whatever slip photos exist in this session under a flagged-slips
-    folder and emails the PM team, instead of guessing a job number wrong.
-    Can be called at any point in the flow — before or after confirm_job.
-    """
-    cfg = load_config()
+@app.route("/api/auth/pm_login", methods=["POST"])
+def api_auth_pm_login():
     data = request.get_json(silent=True) or {}
-
-    session_id = data.get("session_id")
-    reason = data.get("reason", "No reason given")
-    note = data.get("note", "")
-    staff = data.get("staff", "")
-
-    if not session_id:
-        return jsonify({"error": "missing 'session_id'"}), 400
-    metadata = _load_session(cfg, session_id)
-    if not metadata:
-        return jsonify({"error": f"no scan session found for {session_id}"}), 404
-
-    target_dir = os.path.join(cfg["dest_dir"], cfg["flagged_slips_folder"], session_id)
-    os.makedirs(target_dir, exist_ok=True)
-
-    session_dir = _session_dir(cfg, session_id)
-    filed = []
-    # pages not yet filed (job not confirmed) live in the session dir directly
-    for fname in metadata.get("slip_photo_filenames", []):
-        src = os.path.join(session_dir, fname)
-        if os.path.isfile(src):
-            dest = unique_destination(target_dir, fname)
-            shutil.move(src, dest)
-            filed.append(dest)
-    # pages already filed to a job folder (job was confirmed, then something else went wrong)
-    for src in metadata.get("filed_slip_paths", []):
-        if os.path.isfile(src):
-            dest = unique_destination(target_dir, os.path.basename(src))
-            shutil.move(src, dest)
-            filed.append(dest)
-
-    shutil.rmtree(session_dir, ignore_errors=True)
-
-    subject = f"[AES Logistics] Flagged packing slip — {reason}"
-    body = (
-        f"A packing slip was flagged and needs review.\n\n"
-        f"Reason: {reason}\n"
-        f"Note: {note or '(none)'}\n"
-        f"Flagged by: {staff or '(not provided)'}\n"
-        f"Time: {datetime.now().isoformat()}\n"
-    )
-    email_sent, email_error = emailer.send_flag_email(
-        to_addr=cfg["flag_alert_email_to"], subject=subject, body_text=body,
-        attachment_paths=filed,
-    )
-
-    log.warning(f"Flagged incoming session {session_id} ({reason}) — email_sent={email_sent}")
-
-    return jsonify({"status": "ok", "email_sent": email_sent, "email_error": email_error})
-
-
-### --- Auth --- ###
-
-@app.route("/api/auth/login", methods=["POST"])
-def api_login():
-    """Login - proxy to auth-service and establish local session."""
-    data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    password = data.get("password") or ""
+    email = data.get("email", "").strip()
+    password = data.get("password", "").strip()
 
     if not email or not password:
-        return jsonify({"error": "Email and password required"}), 400
+        return jsonify({"error": "missing email or password"}), 400
 
+    pm_record = None
     try:
-        # Call auth-service
-        resp = requests.post(
-            f"{AUTH_SERVICE_URL}/api/auth/login",
-            json={"email": email, "password": password},
-            timeout=5
-        )
+        from scheduling import get_pm_by_email
+        pm_record = get_pm_by_email(email)
+    except Exception as e:
+        log.warning(f"PM lookup failed: {e}")
 
-        if resp.status_code != 200:
-            return jsonify({"error": "Invalid email or password"}), 401
+    if not pm_record or pm_record.get("password") != password:
+        return jsonify({"error": "invalid credentials"}), 401
 
-        user_data = resp.json()
-
-        # Establish local session
-        session["user_id"] = user_data.get("user_id")
-        session["email"] = user_data.get("email")
-        session["name"] = user_data.get("name")
-        session["role"] = user_data.get("role")
-        session.permanent = True
-
-        log.info(f"User logged in: {email} ({user_data.get('role')})")
-
-        return jsonify({
-            "user_id": user_data.get("user_id"),
-            "email": user_data.get("email"),
-            "name": user_data.get("name"),
-            "role": user_data.get("role")
-        }), 200
-
-    except requests.exceptions.RequestException as e:
-        log.error(f"Auth service error: {e}")
-        return jsonify({"error": "Authentication service unavailable"}), 503
+    session.permanent = True
+    session["user_id"] = email
+    session["email"] = email
+    session["name"] = pm_record.get("name", email)
+    session["role"] = "pm"
+    return jsonify({"status": "ok", "email": email, "name": session["name"]})
 
 
 @app.route("/api/auth/logout", methods=["POST"])
-def api_logout():
-    """Logout - clear local session."""
-    email = session.get("email", "unknown")
+def api_auth_logout():
     session.clear()
-    log.info(f"User logged out: {email}")
     return jsonify({"status": "ok"})
 
 
 @app.route("/api/auth/me")
-def api_me():
-    """Get current user from local session."""
+def api_auth_me():
     if "user_id" not in session:
         return jsonify({"error": "not logged in"}), 401
-
     return jsonify({
         "user_id": session.get("user_id"),
-        "email": session.get("email"),
         "name": session.get("name"),
-        "role": session.get("role")
+        "email": session.get("email"),
+        "role": session.get("role"),
     })
 
 
-@app.route("/api/auth/admin/register_user", methods=["POST"])
-@pm_or_admin_required
-def api_admin_register_user():
-    """Register new user (Admin/PM only)."""
+@app.route("/api/auth/admin/reset_driver_code", methods=["POST"])
+@admin_required
+def api_auth_admin_reset_driver_code():
     data = request.get_json(silent=True) or {}
-
-    try:
-        # Call auth-service to register user
-        resp = requests.post(
-            f"{AUTH_SERVICE_URL}/api/auth/register",
-            json={
-                "name": data.get("name"),
-                "email": data.get("email"),
-                "password": data.get("password"),
-                "role": data.get("role", "driver")
-            },
-            timeout=5
-        )
-
-        if resp.status_code not in (200, 201):
-            error_data = resp.json() if resp.text else {}
-            return jsonify({"error": error_data.get("error", "Failed to register user")}), resp.status_code
-
-        user_data = resp.json()
-        log.info(f"User registered: {data.get('email')}")
-        return jsonify(user_data), resp.status_code
-
-    except requests.exceptions.RequestException as e:
-        log.error(f"Auth service error: {e}")
-        return jsonify({"error": "Authentication service unavailable"}), 503
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "missing driver name"}), 400
+    return jsonify({"status": "ok", "message": f"Code reset for {name}"})
 
 
-@app.route("/api/auth/admin/users")
+@app.route("/api/auth/admin/register_driver", methods=["POST"])
+@admin_required
+def api_auth_admin_register_driver():
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "missing driver name"}), 400
+    return jsonify({"status": "ok", "name": name})
+
+
+@app.route("/api/auth/admin/register_pm", methods=["POST"])
 @pm_or_admin_required
-def api_admin_list_users():
-    """List all users (PM or Admin only)."""
+def api_auth_admin_register_pm():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email", "").strip()
+    name = data.get("name", "").strip()
+    password = data.get("password", "").strip()
+
+    if not email or not name or not password:
+        return jsonify({"error": "missing email, name, or password"}), 400
+
     try:
-        resp = requests.get(
-            f"{AUTH_SERVICE_URL}/api/auth/users",
-            timeout=5
-        )
-
-        if resp.status_code != 200:
-            return jsonify({"error": "Failed to fetch users"}), resp.status_code
-
-        data = resp.json()
-        return jsonify({"users": data.get("users", [])})
-
-    except requests.exceptions.RequestException as e:
-        log.error(f"Auth service error: {e}")
-        return jsonify({"error": "Authentication service unavailable"}), 503
+        from scheduling import create_pm_account
+        pm = create_pm_account(email, name, password)
+        return jsonify({"status": "ok", "pm": pm})
+    except Exception as e:
+        log.error(f"PM registration failed: {e}")
+        return jsonify({"error": str(e)}), 400
 
 
-### --- Scheduled Delivery flow --- ###
+### --- Scheduled Delivery endpoints --- ###
 
 @app.route("/api/schedule/calendar/settings", methods=["GET"])
 @pm_or_admin_required
-def api_get_calendar_settings():
-    return jsonify({"ics_url": scheduling.get_ics_url()})
+def api_schedule_calendar_settings_get():
+    try:
+        settings = scheduling.get_calendar_settings()
+        return jsonify({"settings": settings})
+    except Exception as e:
+        log.error(f"Calendar settings retrieval failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/schedule/calendar/settings", methods=["POST"])
 @pm_or_admin_required
-def api_set_calendar_settings():
+def api_schedule_calendar_settings_post():
     data = request.get_json(silent=True) or {}
-    scheduling.set_ics_url(data.get("ics_url"))
-    return jsonify({"status": "ok"})
+    ics_url = data.get("ics_url", "").strip()
+
+    try:
+        scheduling.save_calendar_settings({"ics_url": ics_url})
+        return jsonify({"status": "ok", "ics_url": ics_url})
+    except Exception as e:
+        log.error(f"Calendar settings save failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/schedule/calendar/upcoming")
 @pm_or_admin_required
-def api_calendar_upcoming():
-    events = scheduling.fetch_upcoming_events()
-    linked = scheduling.linked_event_uids()
-    for e in events:
-        e["already_scheduled"] = e["uid"] in linked
-    return jsonify({"events": events})
+def api_schedule_calendar_upcoming():
+    try:
+        events = scheduling.upcoming_calendar_events()
+        return jsonify({"events": events})
+    except Exception as e:
+        log.error(f"Upcoming events retrieval failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/schedule", methods=["GET"])
+@app.route("/api/schedule")
 @pm_or_admin_required
-def api_list_schedule():
-    return jsonify({"deliveries": scheduling.list_deliveries()})
+def api_schedule_list():
+    try:
+        deliveries = scheduling.list_deliveries()
+        return jsonify({"deliveries": deliveries})
+    except Exception as e:
+        log.error(f"Schedule list failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/schedule", methods=["POST"])
 @pm_or_admin_required
-def api_create_schedule():
+def api_schedule_create():
     data = request.get_json(silent=True) or {}
-    required = ["job_number", "delivery_date", "receiver_name", "receiver_email", "pm_email"]
-    missing = [k for k in required if not data.get(k)]
+
+    required_fields = ["calendar_event_id", "job_number", "receiver_name", "receiver_email", "receiver_phone", "site_address", "assigned_driver", "pm_email"]
+    missing = [f for f in required_fields if not data.get(f)]
     if missing:
-        return jsonify({"error": f"Missing required field(s): {', '.join(missing)}"}), 400
+        return jsonify({"error": f"missing fields: {', '.join(missing)}"}), 400
 
-    record = scheduling.create_delivery(
-        job_number=data["job_number"],
-        delivery_date=data["delivery_date"],
-        receiver_name=data["receiver_name"],
-        receiver_email=data["receiver_email"],
-        pm_email=data["pm_email"],
-        site_address=data.get("site_address", ""),
-        calendar_event_uid=data.get("calendar_event_uid"),
-        assigned_driver=data.get("assigned_driver"),
-        receiver_phone=data.get("receiver_phone"),
-        customer_name=data.get("customer_name", ""),
-        customer_po=data.get("customer_po", ""),
-        job_name=data.get("job_name", ""),
-        delivery_method=data.get("delivery_method", ""),
-    )
-    return jsonify(record)
-
-
-@app.route("/api/schedule/drivers")
-@pm_or_admin_required
-def api_schedule_drivers():
-    """List of registered driver/warehouse names, for the PM portal's assignment dropdown."""
     try:
-        resp = requests.get(
-            f"{AUTH_SERVICE_URL}/api/auth/users",
-            timeout=5
+        delivery = scheduling.create_delivery(
+            calendar_event_id=data["calendar_event_id"],
+            job_number=data["job_number"],
+            receiver_name=data["receiver_name"],
+            receiver_email=data["receiver_email"],
+            receiver_phone=data["receiver_phone"],
+            site_address=data["site_address"],
+            assigned_driver=data["assigned_driver"],
+            pm_email=data["pm_email"],
+            customer_name=data.get("customer_name"),
+            customer_po=data.get("customer_po"),
+            job_name=data.get("job_name"),
+            delivery_method=data.get("delivery_method"),
         )
-        if resp.status_code != 200:
-            return jsonify({"error": "Failed to fetch users"}), resp.status_code
-        all_users = resp.json().get("users", [])
-        drivers = [u for u in all_users if u.get("role") == "driver"]
-        return jsonify({"drivers": drivers})
-    except requests.exceptions.RequestException as e:
-        log.error(f"Auth service error: {e}")
-        return jsonify({"error": "Authentication service unavailable"}), 503
+        return jsonify({"status": "ok", "delivery": delivery})
+    except Exception as e:
+        log.error(f"Schedule creation failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/schedule/<delivery_id>/ticket", methods=["POST"])
 @pm_or_admin_required
-def api_upload_ticket(delivery_id):
-    file_obj = request.files.get("ticket")
-    if file_obj is None:
-        return jsonify({"error": "missing 'ticket' file"}), 400
-    path = scheduling.save_ticket_file(delivery_id, file_obj)
-    if not path:
-        return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
-    log.info(f"Ticket uploaded for scheduled delivery {delivery_id}")
-    return jsonify({"status": "ok", "delivery": scheduling.get_delivery(delivery_id)})
-
-
-@app.route("/api/schedule/<delivery_id>/generate_ticket", methods=["POST"])
-@pm_or_admin_required
-def api_generate_ticket(delivery_id):
-    """PM fills in line items; server renders a ticket image from the delivery's
-    existing job/receiver info plus these items, and files it exactly like an
-    uploaded ticket would be."""
+def api_schedule_ticket(delivery_id):
     delivery = scheduling.get_delivery(delivery_id)
     if not delivery:
         return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
 
-    data = request.get_json(silent=True) or {}
-    line_items = data.get("line_items") or []
-    if not isinstance(line_items, list) or not all(isinstance(i, dict) for i in line_items):
-        return jsonify({"error": "line_items must be a list of {description, quantity, ...} objects"}), 400
+    ticket_file = request.files.get("ticket")
+    if not ticket_file:
+        if request.form.get("generate_ticket") != "true":
+            return jsonify({"error": "missing ticket file"}), 400
 
-    pm_name = session.get("name") or session.get("email", "")
+        line_items_raw = request.form.get("line_items")
+        try:
+            line_items = json.loads(line_items_raw) if line_items_raw else []
+        except json.JSONDecodeError:
+            return jsonify({"error": "line_items must be valid JSON"}), 400
 
-    image_bytes = ticket_render.render_ticket_image(
-        job_number=delivery["job_number"],
-        delivery_date=delivery["delivery_date"],
-        receiver_name=delivery["receiver_name"],
-        receiver_email=delivery["receiver_email"],
-        site_address=delivery.get("site_address", ""),
-        line_items=line_items,
-        customer_name=delivery.get("customer_name", ""),
-        customer_po=delivery.get("customer_po", ""),
-        job_name=delivery.get("job_name", ""),
-        delivery_method=delivery.get("delivery_method", ""),
-        pm_name=pm_name,
-    )
-    record = scheduling.save_generated_ticket(delivery_id, image_bytes, line_items, pm_name=pm_name)
-    log.info(f"Ticket generated for scheduled delivery {delivery_id} with {len(line_items)} line item(s)")
+        ticket_bytes = ticket_render.render_ticket(
+            delivery,
+            line_items=line_items,
+        )
+    else:
+        ticket_bytes = ticket_file.read()
+
+    record = scheduling.set_ticket(delivery_id, ticket_bytes)
+
+    log.info(f"Ticket set for delivery {delivery_id}")
     return jsonify({"status": "ok", "delivery": record})
 
 
-@app.route("/api/schedule/<delivery_id>/revise_ticket", methods=["POST"])
+@app.route("/api/schedule/<delivery_id>/file/<n>")
 @login_required
-def api_revise_ticket(delivery_id):
-    """
-    Edits an existing ticket's line items/header fields and regenerates it.
-    Always allowed, at any stage — see scheduling.revise_ticket's docstring
-    for exactly how the record reacts depending on how far along the
-    delivery already is. Always emails the assigned PM and a warehouse
-    alert address with the updated ticket, flagging that it changed.
-    Available to any logged-in role (PM, admin, or warehouse) since a
-    warehouse worker may be the one who spots something wrong.
-    """
+def api_schedule_file(delivery_id, n):
+    delivery = scheduling.get_delivery(delivery_id)
+    if not delivery:
+        return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
+
+    if n == "ticket":
+        filepath = scheduling.ticket_file_path(delivery_id)
+        if not os.path.exists(filepath):
+            return jsonify({"error": "no ticket on file"}), 404
+        return send_file(filepath, mimetype="image/jpeg", as_attachment=False)
+    else:
+        try:
+            n_int = int(n)
+        except ValueError:
+            return jsonify({"error": "invalid file index"}), 400
+
+        photo_filenames = delivery.get("photo_filenames") or []
+        signature_filename = delivery.get("signature_filename")
+
+        if n_int < len(photo_filenames):
+            filepath = scheduling.delivery_file_path(delivery_id, photo_filenames[n_int])
+        elif n_int == len(photo_filenames) and signature_filename:
+            filepath = scheduling.delivery_file_path(delivery_id, signature_filename)
+        else:
+            return jsonify({"error": "file not found"}), 404
+
+        if not os.path.exists(filepath):
+            return jsonify({"error": "file not found"}), 404
+        return send_file(filepath, mimetype="image/jpeg", as_attachment=False)
+
+
+@app.route("/api/schedule/<delivery_id>/revise", methods=["POST"])
+@pm_or_admin_required
+def api_schedule_revise(delivery_id):
     delivery = scheduling.get_delivery(delivery_id)
     if not delivery:
         return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
 
     data = request.get_json(silent=True) or {}
-    line_items = data.get("line_items") or []
-    if not isinstance(line_items, list) or not all(isinstance(i, dict) for i in line_items):
-        return jsonify({"error": "line_items must be a list of {description, quantity, ...} objects"}), 400
 
-    header_fields = {
-        k: data[k] for k in ("customer_name", "customer_po", "job_name", "delivery_method", "site_address")
-        if k in data
-    }
+    updates = {}
+    if "job_number" in data:
+        updates["job_number"] = data["job_number"]
+    if "receiver_name" in data:
+        updates["receiver_name"] = data["receiver_name"]
+    if "receiver_email" in data:
+        updates["receiver_email"] = data["receiver_email"]
+    if "receiver_phone" in data:
+        updates["receiver_phone"] = data["receiver_phone"]
+    if "site_address" in data:
+        updates["site_address"] = data["site_address"]
+    if "customer_name" in data:
+        updates["customer_name"] = data["customer_name"]
+    if "customer_po" in data:
+        updates["customer_po"] = data["customer_po"]
+    if "job_name" in data:
+        updates["job_name"] = data["job_name"]
+    if "delivery_method" in data:
+        updates["delivery_method"] = data["delivery_method"]
 
-    cfg = load_config()
-    merged = {**delivery, **header_fields}
+    if not updates:
+        return jsonify({"error": "no fields to update"}), 400
 
-    image_bytes = ticket_render.render_ticket_image(
-        job_number=merged["job_number"],
-        delivery_date=merged["delivery_date"],
-        receiver_name=merged["receiver_name"],
-        receiver_email=merged["receiver_email"],
-        site_address=merged.get("site_address", ""),
-        line_items=line_items,
-        customer_name=merged.get("customer_name", ""),
-        customer_po=merged.get("customer_po", ""),
-        job_name=merged.get("job_name", ""),
-        delivery_method=merged.get("delivery_method", ""),
-        pm_name=merged.get("pm_name", ""),
-    )
-    record, reset_to_pack = scheduling.revise_ticket(delivery_id, image_bytes, line_items, header_fields=header_fields)
-    if not record:
-        return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
-
-    ticket_path = scheduling.ticket_file_path(delivery_id)
-    revised_by = session.get("name") or session.get("email", "")
-    subject = f"[AES Logistics] Delivery ticket REVISED — Job #{record['job_number']}"
-
-    stage_note = ""
-    if reset_to_pack:
-        stage_note = (
-            "\nThis delivery had already been packed — since the checked-off items no longer "
-            "match the revised ticket, it has been reset and needs to be re-packed and "
-            "re-verified before a driver can take it.\n"
-        )
-    elif record["status"] == "en_route":
-        stage_note = "\nHeads up: the driver is already en route for this delivery — please coordinate directly if this change matters before drop-off.\n"
-    elif record["status"] == "completed":
-        stage_note = "\nHeads up: this delivery was already marked completed — this revision is a record correction after the fact.\n"
-
-    body = (
-        f"The delivery ticket for Job #{record['job_number']} has been revised — please use the "
-        f"attached updated version.\n\n"
-        f"Revised by: {revised_by}\n"
-        f"Revision #{record['revision_count']}\n"
-        f"Time: {record['last_revised_at']}\n"
-        f"{stage_note}"
-    )
-    recipients = [addr for addr in [record.get("pm_email"), cfg["warehouse_alert_email"]] if addr]
-    for to_addr in recipients:
-        sent, err = emailer.send_flag_email(to_addr=to_addr, subject=subject, body_text=body, attachment_path=ticket_path)
-        if not sent:
-            log.warning(f"Could not email revised ticket to {to_addr}: {err}")
-
-    log.info(f"Ticket revised for delivery {delivery_id} (revision #{record['revision_count']}) by {revised_by}, reset_to_pack={reset_to_pack}")
-    return jsonify({"status": "ok", "delivery": record, "reset_to_pack": reset_to_pack})
+    record = scheduling.revise_delivery(delivery_id, updates)
+    log.info(f"Delivery {delivery_id} revised: {updates}")
+    return jsonify({"status": "ok", "delivery": record})
 
 
-@app.route("/api/schedule/<delivery_id>/send_to_pm", methods=["POST"])
-@login_required
-def api_send_to_pm(delivery_id):
-    """Manually emails a copy of the current ticket to any chosen PM — independent of who's already assigned to the job."""
+@app.route("/api/schedule/<delivery_id>/send_copy_to_pm", methods=["POST"])
+@pm_or_admin_required
+def api_schedule_send_copy_to_pm(delivery_id):
     delivery = scheduling.get_delivery(delivery_id)
     if not delivery:
         return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
-    if not delivery.get("ticket_filename"):
-        return jsonify({"error": "This delivery doesn't have a ticket yet."}), 400
 
     data = request.get_json(silent=True) or {}
-    pm_email = (data.get("pm_email") or "").strip()
-    if not pm_email:
-        return jsonify({"error": "missing 'pm_email'"}), 400
+    recipient_pm_email = data.get("pm_email")
+
+    if not recipient_pm_email:
+        return jsonify({"error": "missing pm_email"}), 400
 
     ticket_path = scheduling.ticket_file_path(delivery_id)
-    sender = session.get("name") or session.get("email", "")
-    subject = f"[AES Logistics] Delivery ticket — Job #{delivery['job_number']}"
-    body = (
-        f"A copy of the delivery ticket for Job #{delivery['job_number']} was sent to you.\n\n"
-        f"Sent by: {sender}\n"
-        f"Time: {datetime.now().isoformat()}\n"
+    if not os.path.exists(ticket_path):
+        return jsonify({"error": "ticket not yet set"}), 400
+
+    sent, err = emailer.send_flag_email(
+        to_addr=recipient_pm_email,
+        subject=f"[AES Logistics] Delivery ticket copy — Job #{delivery['job_number']}",
+        body_text=f"Forwarding ticket for Job #{delivery['job_number']}.",
+        attachment_paths=[ticket_path],
     )
-    sent, err = emailer.send_flag_email(to_addr=pm_email, subject=subject, body_text=body, attachment_path=ticket_path)
+
     if not sent:
-        log.warning(f"Could not send ticket to {pm_email}: {err}")
+        log.error(f"Failed to send ticket copy to {recipient_pm_email}: {err}")
+        return jsonify({"status": "error", "error": err}), 500
 
-    log.info(f"Ticket for delivery {delivery_id} manually sent to {pm_email} by {sender}, sent={sent}")
-    return jsonify({"status": "ok", "sent": sent, "error": err})
-
-
-@app.route("/api/schedule/<delivery_id>/file/<filename>")
-@login_required
-def api_schedule_file(delivery_id, filename):
-    path = scheduling.delivery_file_path(delivery_id, filename)
-    if not os.path.isfile(path):
-        return jsonify({"error": "file not found"}), 404
-    return send_file(path)
-
-
-@app.route("/api/schedule/warehouse/ready_to_pack")
-@login_required
-def api_schedule_ready_to_pack():
-    """Outgoing Inventory queue: tickets that exist but haven't been packed/signed yet."""
-    return jsonify({"deliveries": scheduling.deliveries_ready_to_pack()})
+    log.info(f"Ticket for delivery {delivery_id} sent to {recipient_pm_email}")
+    return jsonify({"status": "ok"})
 
 
 @app.route("/api/schedule/<delivery_id>/pack", methods=["POST"])
 @login_required
 def api_schedule_pack(delivery_id):
-    """
-    Warehouse's outgoing-inventory step. If the delivery has line items,
-    every item must be checked off (line_item_checks, a JSON array of bools
-    matching the item list). If there are no line items (an uploaded photo
-    ticket with nothing structured to check), a single overall
-    'checkoff_confirmed' flag is used instead.
-    """
     delivery = scheduling.get_delivery(delivery_id)
     if not delivery:
         return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
 
-    packed_by = request.form.get("packed_by", "").strip()
-    if not packed_by:
-        return jsonify({"error": "Missing packer's name."}), 400
-
+    packed_by = request.form.get("packed_by", "")
     signature_file = request.files.get("signature")
-    if signature_file is None:
-        return jsonify({"error": "missing 'signature' file"}), 400
+
+    if not packed_by or not signature_file:
+        return jsonify({"error": "missing packed_by or signature"}), 400
 
     line_items = delivery.get("line_items") or []
-
     if line_items:
         checks_raw = request.form.get("line_item_checks")
         try:
@@ -1126,10 +715,6 @@ def api_schedule_pack(delivery_id):
 
     record = scheduling.pack_delivery(delivery_id, checks, packed_by, signature_file)
 
-    # Packing an outgoing delivery for this job means that job's stored
-    # material is leaving the warehouse — clear it from the active
-    # inventory location log. See mark_removed_by_job's docstring for why
-    # this is a job-number-level link rather than per-item.
     removed_count = inventory.mark_removed_by_job(delivery["job_number"])
 
     log.info(f"Delivery {delivery_id} packed by {packed_by}; {removed_count} inventory entr(ies) marked shipped for Job #{delivery['job_number']}")
@@ -1145,7 +730,6 @@ def api_schedule_driver_today():
 @app.route("/api/schedule/driver/mine")
 @login_required
 def api_schedule_driver_mine():
-    """A driver's full assigned list — not just today's — for the 'My Deliveries' menu."""
     driver_name = session.get("name")
     return jsonify({"deliveries": scheduling.deliveries_assigned_to(driver_name)})
 
@@ -1153,11 +737,6 @@ def api_schedule_driver_mine():
 @app.route("/api/schedule/<delivery_id>/start", methods=["POST"])
 @login_required
 def api_schedule_start(delivery_id):
-    """
-    Driver taps 'Start This Delivery'. Computes an ETA (best-effort) and
-    texts the receiver that the driver is on the way. Never blocks on either
-    the maps lookup or the SMS send failing — a delivery can always start.
-    """
     delivery = scheduling.get_delivery(delivery_id)
     if not delivery:
         return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
@@ -1235,6 +814,33 @@ def api_schedule_complete(delivery_id):
     if len(photo_files) < 2:
         return jsonify({"error": "At least 2 photos of the material are required."}), 400
 
+    # ===== UPLOAD TO AES FILE SERVICE =====
+    try:
+        # Read file contents into memory
+        sig_buffer = signature_file.read()
+        signature_file.seek(0)  # Reset for local saving
+        
+        photo_buffers = []
+        for photo_file in photo_files:
+            photo_buffer = photo_file.read()
+            photo_file.seek(0)  # Reset for local saving
+            photo_buffers.append(photo_buffer)
+        
+        # Upload to AES
+        aes_result = upload_delivery_photos_to_aes(
+            delivery_id=delivery_id,
+            job_number=delivery["job_number"],
+            signature_buffer=sig_buffer,
+            photo_buffers=photo_buffers
+        )
+        
+        log.info(f"AES upload result for delivery {delivery_id}: {len(aes_result['uploaded'])} files processed")
+        
+    except Exception as e:
+        log.error(f"Error uploading to AES: {str(e)}")
+        # Continue anyway - local saving will still work
+
+    # ===== CONTINUE WITH LOCAL SAVING =====
     record = scheduling.complete_delivery(
         delivery_id=delivery_id,
         checkoff_confirmed=checkoff_confirmed,
@@ -1294,8 +900,6 @@ def api_inventory_list():
 @app.route("/api/inventory/<entry_id>/remove", methods=["POST"])
 @pm_or_admin_required
 def api_inventory_remove(entry_id):
-    """Manual removal — a safety valve for partial shipments or corrections
-    that the automatic job-number-based removal (on packing) can't handle."""
     entry = inventory.mark_removed(entry_id)
     if not entry:
         return jsonify({"error": f"no inventory entry found for id {entry_id}"}), 404
@@ -1313,6 +917,91 @@ def api_inventory_export():
         as_attachment=True,
         download_name=filename,
     )
+
+
+### --- Incoming Inventory (packing slips) endpoints --- ###
+
+@app.route("/api/incoming/scan", methods=["POST"])
+@login_required
+def api_incoming_scan():
+    slip_file = request.files.get("slip")
+    if not slip_file:
+        return jsonify({"error": "missing 'slip' file"}), 400
+
+    slip_bytes = slip_file.read()
+    slip_path = os.path.join(CFG["incoming_staging_dir"], f"{uuid.uuid4()}.jpg")
+    os.makedirs(os.path.dirname(slip_path), exist_ok=True)
+    with open(slip_path, "wb") as f:
+        f.write(slip_bytes)
+
+    job_pattern = CFG.get("job_number_pattern", r"job\s*#?\s*:?\s*(?P<job>\d{3,8})")
+    po_pattern = CFG.get("po_number_pattern", r"p\.o\.\s*#?\s*:?\s*(?P<po>[A-Za-z0-9\-]{3,20})")
+
+    job_number = extract_job_number(slip_path, job_pattern)
+    po_number = extract_po_number(slip_path, po_pattern)
+
+    return jsonify({
+        "status": "ok",
+        "slip_id": os.path.basename(slip_path),
+        "job_number": job_number,
+        "po_number": po_number,
+    })
+
+
+@app.route("/api/incoming/confirm", methods=["POST"])
+@login_required
+def api_incoming_confirm():
+    data = request.get_json(silent=True) or {}
+    slip_id = data.get("slip_id", "").strip()
+    job_number = data.get("job_number", "").strip()
+    po_number = data.get("po_number", "").strip()
+
+    if not slip_id or not job_number:
+        return jsonify({"error": "missing slip_id or job_number"}), 400
+
+    slip_path = os.path.join(CFG["incoming_staging_dir"], slip_id)
+    if not os.path.exists(slip_path):
+        return jsonify({"error": "slip not found"}), 404
+
+    dest_dir = os.path.join(CFG["incoming_slip_subfolder"], f"Job_{job_number}")
+    final_path = unique_destination(dest_dir, f"packing_slip_{slip_id}")
+    os.makedirs(os.path.dirname(final_path), exist_ok=True)
+    shutil.move(slip_path, final_path)
+
+    record = inventory.log_packing_slip(job_number, po_number, slip_id)
+    log.info(f"Packing slip {slip_id} filed for Job #{job_number}")
+
+    return jsonify({"status": "ok", "entry": record})
+
+
+@app.route("/api/incoming/flag", methods=["POST"])
+@login_required
+def api_incoming_flag():
+    data = request.get_json(silent=True) or {}
+    slip_id = data.get("slip_id", "").strip()
+    reason = data.get("reason", "no job number").strip()
+
+    if not slip_id:
+        return jsonify({"error": "missing slip_id"}), 400
+
+    slip_path = os.path.join(CFG["incoming_staging_dir"], slip_id)
+    if not os.path.exists(slip_path):
+        return jsonify({"error": "slip not found"}), 404
+
+    flagged_dir = os.path.join(CFG["dest_dir"], CFG.get("flagged_slips_folder", "flagged_packing_slips"))
+    final_path = unique_destination(flagged_dir, slip_id)
+    os.makedirs(os.path.dirname(final_path), exist_ok=True)
+    shutil.move(slip_path, final_path)
+
+    sent, err = emailer.send_flag_email(
+        to_addr=CFG.get("flag_alert_email_to", "PMteam@aes-energy.com"),
+        subject="[AES Logistics] Flagged packing slip — could not read job number",
+        body_text=f"A packing slip could not be processed. Reason: {reason}.",
+        attachment_paths=[final_path] if os.path.exists(final_path) else [],
+    )
+
+    log.info(f"Packing slip {slip_id} flagged and emailed to PM team. Email sent: {sent}")
+    return jsonify({"status": "ok", "email_sent": sent, "email_error": err})
 
 
 if __name__ == "__main__":
