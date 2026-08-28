@@ -156,16 +156,23 @@ def upload_to_aes(file_buffer, directory, shipment_id, original_filename, metada
         
         # Prepare multipart form data
         files = {'file': (aes_filename, file_buffer, 'image/jpeg')}
-        data = {'filename': aes_filename}
+        
+        # ✅ CORRECTED PARAMETERS per API spec:
+        # - logisticsId: REQUIRED (shipment ID)
+        # - directoryPath: REQUIRED (which directory to save to)
+        data = {
+            'logisticsId': shipment_id,     # REQUIRED - tells API the job/shipment ID
+            'directoryPath': directory       # REQUIRED - tells API which directory (INTAKE, DELIVERY, etc)
+        }
         
         if metadata:
             data['metadata'] = json.dumps(metadata)
         
         headers = {'X-API-Key': AES_API_KEY}
         
-        # Send to AES service
+        # ✅ CORRECTED ENDPOINT: /api/files/upload (not /api/upload)
         response = requests.post(
-            f"{AES_API_URL}/api/upload",
+            f"{AES_API_URL}/api/files/upload",  # FIXED: Added /files
             files=files,
             data=data,
             headers=headers,
@@ -174,16 +181,19 @@ def upload_to_aes(file_buffer, directory, shipment_id, original_filename, metada
         
         if response.status_code == 200:
             result = response.json()
-            log.info(f"✓ AES upload success: {aes_filename}")
+            # Response structure: {"success": true, "data": {fileId, fileName, filePath, size, uploadedAt}}
+            file_data = result.get('data', {})
+            log.info(f"✓ AES upload success: {file_data.get('fileName')}")
             return {
                 'success': True,
-                'file': result.get('file'),
-                'size': result.get('size'),
-                'url': f"{AES_API_URL}/api/download/{result.get('file')}"
+                'file': file_data.get('fileName'),
+                'fileId': file_data.get('fileId'),
+                'size': file_data.get('size'),
+                'url': f"{AES_API_URL}/api/files/{file_data.get('fileId')}"
             }
         else:
             log.warning(f"AES upload failed (HTTP {response.status_code}): {response.text}")
-            return {'success': False, 'error': f"HTTP {response.status_code}"}
+            return {'success': False, 'error': f"HTTP {response.status_code}: {response.text}"}
     
     except Exception as e:
         log.warning(f"AES upload error: {str(e)}")
@@ -203,31 +213,37 @@ def upload_delivery_photos_to_aes(delivery_id, job_number, signature_buffer, pho
         'failed': []
     }
     
+    # Construct shipment ID for AES (used across all uploads for this delivery)
+    shipment_id = f"SHIP-{delivery_id}"
+    
     # Upload signature
     sig_result = upload_to_aes(
         signature_buffer,
         'DELIVERY',
-        f"SHIP-{delivery_id}",
+        shipment_id,
         'signature.jpg',
         {'type': 'signature', 'job_number': job_number}
     )
     results['uploaded'].append(sig_result)
     if not sig_result['success']:
         results['success'] = False
+        log.warning(f"Signature upload failed for delivery {delivery_id}: {sig_result['error']}")
     
     # Upload delivery photos
     for i, photo_buffer in enumerate(photo_buffers):
         photo_result = upload_to_aes(
             photo_buffer,
             'DELIVERY',
-            f"SHIP-{delivery_id}",
+            shipment_id,
             f"delivery-photo-{i+1}.jpg",
             {'type': 'delivery_photo', 'photo_number': i+1, 'job_number': job_number}
         )
         results['uploaded'].append(photo_result)
         if not photo_result['success']:
             results['success'] = False
+            log.warning(f"Photo {i+1} upload failed for delivery {delivery_id}: {photo_result['error']}")
     
+    log.info(f"AES upload summary for delivery {delivery_id}: {len([u for u in results['uploaded'] if u['success']])} succeeded, {len([u for u in results['uploaded'] if not u['success']])} failed")
     return results
 
 
