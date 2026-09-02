@@ -2,6 +2,21 @@
 
 let currentUser = null;
 
+// Cache user in localStorage
+function cacheUser(user) {
+  if (user) {
+    localStorage.setItem("aes_cached_user", JSON.stringify(user));
+  } else {
+    localStorage.removeItem("aes_cached_user");
+  }
+}
+
+// Restore user from localStorage
+function getCachedUser() {
+  const cached = localStorage.getItem("aes_cached_user");
+  return cached ? JSON.parse(cached) : null;
+}
+
 function show(id) {
   document.querySelectorAll(".screen").forEach((el) => el.classList.add("hidden"));
   document.getElementById(id).classList.remove("hidden");
@@ -22,18 +37,15 @@ async function api(url, opts = {}) {
 // ---------- Login ----------
 
 async function tryRestoreSession() {
-  try {
-    const me = await api("/api/auth/me");
-    if (me.role === "pm" || me.role === "admin") {
-      currentUser = me;
-      showDashboard();
-      return;
-    }
-  } catch (e) {
-    // not logged in, or not a pm/admin session - show login
+  const cached = getCachedUser();
+  if (cached) {
+    currentUser = cached;
+    showDashboard();
+    return;
   }
   show("screen-login");
 }
+
 
 function initLogin() {
   document.getElementById("btn-login").addEventListener("click", async () => {
@@ -54,6 +66,7 @@ function initLogin() {
         return;
       }
       currentUser = { role: result.role, email: result.email, name: result.name };
+      cacheUser(currentUser);
       showDashboard();
     } catch (e) {
       errorEl.textContent = e.message;
@@ -65,6 +78,7 @@ function initLogin() {
 async function logout() {
   await api("/api/auth/logout", { method: "POST" }).catch(() => {});
   currentUser = null;
+  cacheUser(null);  // Clear cache
   show("screen-login");
 }
 
