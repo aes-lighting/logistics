@@ -16,15 +16,10 @@ Endpoints:
     POST /api/upload             -> receives one delivery's photos + metadata (login required)
     GET  /api/health             -> health check
 
-    Auth:
-    POST /api/auth/driver_login   -> name + code; first use of a name registers it
-    POST /api/auth/admin_login    -> fixed admin email + password (from .env)
-    POST /api/auth/pm_login       -> PM email + password (admin-provisioned)
-    POST /api/auth/logout         -> clears the session
-    GET  /api/auth/me             -> current session identity, or 401
-    POST /api/auth/admin/reset_driver_code -> admin-only, resets a driver's code
-    POST /api/auth/admin/register_driver   -> admin-only, pre-registers a driver
-    POST /api/auth/admin/register_pm       -> admin-only, creates a PM account
+    Auth (via auth_routes.py Blueprint):
+    POST /api/auth/login          -> email + password; proxies to auth-service
+    POST /api/auth/logout         -> clears client-side auth
+    GET  /api/auth/me             -> current user from Authorization header
 
     Scheduled Delivery flow (calendar-linked, ticket + checkoff + signature):
     GET  /api/schedule/calendar/settings    -> get the ICS feed URL (PM/admin)
@@ -64,7 +59,7 @@ from datetime import datetime
 from functools import wraps
 
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, send_from_directory, session, send_file
+from flask import Flask, request, jsonify, send_from_directory, send_file
 import requests
 
 import emailer
@@ -75,16 +70,23 @@ import qr_ticket
 import scheduling
 import sms
 import ticket_render
+from auth_utils import get_auth_header, AUTH_SERVICE_URL
+from auth_decorators import login_required, admin_required, pm_or_admin_required
+from auth_routes import auth_bp
 
 load_dotenv()
 
+# ===== Path Configuration =====
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "server_config.json")
-STATIC_DIR = os.path.join(BASE_DIR, "..", "driver_app")
-PM_STATIC_DIR = os.path.join(BASE_DIR, "..", "pm_portal")
+STATIC_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "driver_app"))
+PM_STATIC_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "pm_portal"))
 
-# ===== Auth Service Configuration =====
-AUTH_SERVICE_URL = os.environ.get("AUTH_SERVICE_URL", "http://localhost:5000")
+# Debug: Print paths on startup
+print(f"STATIC_DIR: {STATIC_DIR}")
+print(f"PM_STATIC_DIR: {PM_STATIC_DIR}")
+if os.path.isdir(STATIC_DIR):
+    print(f"Files in STATIC_DIR: {os.listdir(STATIC_DIR)}")
 
 # ===== AES File Service Configuration =====
 AES_API_URL = os.environ.get("AES_API_URL", "http://71.172.107.128:3001")
@@ -102,12 +104,11 @@ if not _secret_key:
         file=sys.stderr,
     )
 app.secret_key = _secret_key
-app.config.update(
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SECURE=True,
-    PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30,  # 30 days
-)
+app.config["JSON_SORT_KEYS"] = False
+
+# NOTE: No longer using Flask session management
+# Authentication is handled entirely by auth-service on Railway
+# Clients store auth info locally and send Authorization header with requests
 
 logging.basicConfig(
     level=logging.INFO,
@@ -115,6 +116,14 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 log = logging.getLogger("aes_logistics")
+
+
+# ===== Register Auth Blueprint =====
+# This automatically registers:
+#   POST   /api/auth/login
+#   POST   /api/auth/logout
+#   GET    /api/auth/me
+app.register_blueprint(auth_bp)
 
 
 # ===== AES File Service Helper Functions =====
@@ -129,14 +138,14 @@ def generate_aes_filename(directory, shipment_id, original_filename):
         ext = ''
     else:
         ext = '.' + name_parts[1].lower()
-    
+
     # Generate timestamp (YYYYMMDDTHHmmss format)
     timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    
+
     # Generate short hash (8 characters)
     random_bytes = os.urandom(4)
     hash_suffix = random_bytes.hex()[:8]
-    
+
     # Format: DIRECTORY_SHIPMENT_TIMESTAMP_HASH.ext
     filename = f"{directory}_{shipment_id}_{timestamp}_{hash_suffix}{ext}"
     return filename
@@ -145,7 +154,7 @@ def generate_aes_filename(directory, shipment_id, original_filename):
 def upload_to_aes(file_buffer, directory, shipment_id, original_filename, metadata=None):
     """
     Upload a photo to the AES File Service.
-    
+
     Returns:
         {'success': True, 'file': '...', 'url': '...'} on success
         {'success': False, 'error': '...'} on failure
@@ -153,10 +162,10 @@ def upload_to_aes(file_buffer, directory, shipment_id, original_filename, metada
     try:
         # Generate the AES-formatted filename
         aes_filename = generate_aes_filename(directory, shipment_id, original_filename)
-        
+
         # Prepare multipart form data
         files = {'file': (aes_filename, file_buffer, 'image/jpeg')}
-        
+
         # ✅ CORRECTED PARAMETERS per API spec:
         # - logisticsId: REQUIRED (shipment ID)
         # - directoryPath: REQUIRED (which directory to save to)
@@ -164,12 +173,12 @@ def upload_to_aes(file_buffer, directory, shipment_id, original_filename, metada
             'logisticsId': shipment_id,     # REQUIRED - tells API the job/shipment ID
             'directoryPath': directory       # REQUIRED - tells API which directory (INTAKE, DELIVERY, etc)
         }
-        
+
         if metadata:
             data['metadata'] = json.dumps(metadata)
-        
+
         headers = {'X-API-Key': AES_API_KEY}
-        
+
         # ✅ CORRECTED ENDPOINT: /api/files/upload (not /api/upload)
         response = requests.post(
             f"{AES_API_URL}/api/files/upload",  # FIXED: Added /files
@@ -178,7 +187,7 @@ def upload_to_aes(file_buffer, directory, shipment_id, original_filename, metada
             headers=headers,
             timeout=30
         )
-        
+
         if response.status_code == 200:
             result = response.json()
             # Response structure: {"success": true, "data": {fileId, fileName, filePath, size, uploadedAt}}
@@ -194,7 +203,7 @@ def upload_to_aes(file_buffer, directory, shipment_id, original_filename, metada
         else:
             log.warning(f"AES upload failed (HTTP {response.status_code}): {response.text}")
             return {'success': False, 'error': f"HTTP {response.status_code}: {response.text}"}
-    
+
     except Exception as e:
         log.warning(f"AES upload error: {str(e)}")
         return {'success': False, 'error': str(e)}
@@ -203,7 +212,7 @@ def upload_to_aes(file_buffer, directory, shipment_id, original_filename, metada
 def upload_delivery_photos_to_aes(delivery_id, job_number, signature_buffer, photo_buffers):
     """
     Upload all photos from a completed delivery to AES.
-    
+
     Returns:
         {'success': True/False, 'uploaded': [...], 'failed': [...]}
     """
@@ -212,10 +221,10 @@ def upload_delivery_photos_to_aes(delivery_id, job_number, signature_buffer, pho
         'uploaded': [],
         'failed': []
     }
-    
+
     # Construct shipment ID for AES (used across all uploads for this delivery)
     shipment_id = f"SHIP-{delivery_id}"
-    
+
     # Upload signature
     sig_result = upload_to_aes(
         signature_buffer,
@@ -228,7 +237,7 @@ def upload_delivery_photos_to_aes(delivery_id, job_number, signature_buffer, pho
     if not sig_result['success']:
         results['success'] = False
         log.warning(f"Signature upload failed for delivery {delivery_id}: {sig_result['error']}")
-    
+
     # Upload delivery photos
     for i, photo_buffer in enumerate(photo_buffers):
         photo_result = upload_to_aes(
@@ -242,44 +251,9 @@ def upload_delivery_photos_to_aes(delivery_id, job_number, signature_buffer, pho
         if not photo_result['success']:
             results['success'] = False
             log.warning(f"Photo {i+1} upload failed for delivery {delivery_id}: {photo_result['error']}")
-    
+
     log.info(f"AES upload summary for delivery {delivery_id}: {len([u for u in results['uploaded'] if u['success']])} succeeded, {len([u for u in results['uploaded'] if not u['success']])} failed")
     return results
-
-
-# ===== Auth Decorators =====
-def login_required(f):
-    """Decorator to require login - checks local session."""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if "user_id" not in session:
-            return jsonify({"error": "not logged in"}), 401
-        return f(*args, **kwargs)
-    return decorated_function
-
-
-def admin_required(f):
-    """Decorator to require admin role."""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if "user_id" not in session:
-            return jsonify({"error": "not logged in"}), 401
-        if session.get("role") != "admin":
-            return jsonify({"error": "admin access required"}), 403
-        return f(*args, **kwargs)
-    return decorated_function
-
-
-def pm_or_admin_required(f):
-    """Decorator to require PM or admin role."""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if "user_id" not in session:
-            return jsonify({"error": "not logged in"}), 401
-        if session.get("role") not in ("pm", "admin"):
-            return jsonify({"error": "pm or admin access required"}), 403
-        return f(*args, **kwargs)
-    return decorated_function
 
 
 def load_config():
@@ -356,6 +330,16 @@ def serve_pm_portal():
     return send_from_directory(PM_STATIC_DIR, "index.html")
 
 
+@app.route("/<path:filename>")
+def serve_static(filename):
+    return send_from_directory(STATIC_DIR, filename)
+
+
+@app.route("/pm/<path:filename>")
+def serve_pm_static(filename):
+    return send_from_directory(PM_STATIC_DIR, filename)
+
+
 @app.route("/api/health")
 def api_health():
     return jsonify({
@@ -363,128 +347,6 @@ def api_health():
         "service": "AES Logistics Server",
         "timestamp": datetime.utcnow().isoformat()
     })
-
-
-### --- Auth endpoints --- ###
-
-@app.route("/api/auth/driver_login", methods=["POST"])
-def api_auth_driver_login():
-    data = request.get_json(silent=True) or {}
-    name = data.get("name", "").strip()
-    code = data.get("code", "").strip()
-
-    if not name or not code:
-        return jsonify({"error": "missing name or code"}), 400
-
-    session.permanent = True
-    session["user_id"] = f"driver_{name}"
-    session["name"] = name
-    session["role"] = "driver"
-    return jsonify({"status": "ok", "name": name})
-
-
-@app.route("/api/auth/admin_login", methods=["POST"])
-def api_auth_admin_login():
-    data = request.get_json(silent=True) or {}
-    email = data.get("email", "").strip()
-    password = data.get("password", "").strip()
-
-    admin_email = os.environ.get("ADMIN_EMAIL")
-    admin_password = os.environ.get("ADMIN_PASSWORD", "admin")
-
-    if not email or not password or email != admin_email or password != admin_password:
-        return jsonify({"error": "invalid credentials"}), 401
-
-    session.permanent = True
-    session["user_id"] = email
-    session["email"] = email
-    session["role"] = "admin"
-    return jsonify({"status": "ok", "email": email})
-
-
-@app.route("/api/auth/pm_login", methods=["POST"])
-def api_auth_pm_login():
-    data = request.get_json(silent=True) or {}
-    email = data.get("email", "").strip()
-    password = data.get("password", "").strip()
-
-    if not email or not password:
-        return jsonify({"error": "missing email or password"}), 400
-
-    pm_record = None
-    try:
-        from scheduling import get_pm_by_email
-        pm_record = get_pm_by_email(email)
-    except Exception as e:
-        log.warning(f"PM lookup failed: {e}")
-
-    if not pm_record or pm_record.get("password") != password:
-        return jsonify({"error": "invalid credentials"}), 401
-
-    session.permanent = True
-    session["user_id"] = email
-    session["email"] = email
-    session["name"] = pm_record.get("name", email)
-    session["role"] = "pm"
-    return jsonify({"status": "ok", "email": email, "name": session["name"]})
-
-
-@app.route("/api/auth/logout", methods=["POST"])
-def api_auth_logout():
-    session.clear()
-    return jsonify({"status": "ok"})
-
-
-@app.route("/api/auth/me")
-def api_auth_me():
-    if "user_id" not in session:
-        return jsonify({"error": "not logged in"}), 401
-    return jsonify({
-        "user_id": session.get("user_id"),
-        "name": session.get("name"),
-        "email": session.get("email"),
-        "role": session.get("role"),
-    })
-
-
-@app.route("/api/auth/admin/reset_driver_code", methods=["POST"])
-@admin_required
-def api_auth_admin_reset_driver_code():
-    data = request.get_json(silent=True) or {}
-    name = data.get("name", "").strip()
-    if not name:
-        return jsonify({"error": "missing driver name"}), 400
-    return jsonify({"status": "ok", "message": f"Code reset for {name}"})
-
-
-@app.route("/api/auth/admin/register_driver", methods=["POST"])
-@admin_required
-def api_auth_admin_register_driver():
-    data = request.get_json(silent=True) or {}
-    name = data.get("name", "").strip()
-    if not name:
-        return jsonify({"error": "missing driver name"}), 400
-    return jsonify({"status": "ok", "name": name})
-
-
-@app.route("/api/auth/admin/register_pm", methods=["POST"])
-@pm_or_admin_required
-def api_auth_admin_register_pm():
-    data = request.get_json(silent=True) or {}
-    email = data.get("email", "").strip()
-    name = data.get("name", "").strip()
-    password = data.get("password", "").strip()
-
-    if not email or not name or not password:
-        return jsonify({"error": "missing email, name, or password"}), 400
-
-    try:
-        from scheduling import create_pm_account
-        pm = create_pm_account(email, name, password)
-        return jsonify({"status": "ok", "pm": pm})
-    except Exception as e:
-        log.error(f"PM registration failed: {e}")
-        return jsonify({"error": str(e)}), 400
 
 
 ### --- Scheduled Delivery endpoints --- ###
@@ -664,7 +526,11 @@ def api_schedule_revise(delivery_id):
         return jsonify({"error": "no fields to update"}), 400
 
     record = scheduling.revise_delivery(delivery_id, updates)
-    log.info(f"Delivery {delivery_id} revised: {updates}")
+
+    # Log who made the revision
+    revised_by = get_auth_header() or "unknown"
+    log.info(f"Delivery {delivery_id} revised by {revised_by}: {updates}")
+
     return jsonify({"status": "ok", "delivery": record})
 
 
@@ -746,7 +612,11 @@ def api_schedule_driver_today():
 @app.route("/api/schedule/driver/mine")
 @login_required
 def api_schedule_driver_mine():
-    driver_name = session.get("name")
+    # Get driver name from request body or query parameter
+    driver_name = request.args.get("driver_name") or request.form.get("driver_name")
+    if not driver_name:
+        return jsonify({"error": "driver_name required"}), 400
+
     return jsonify({"deliveries": scheduling.deliveries_assigned_to(driver_name)})
 
 
@@ -777,7 +647,8 @@ def api_schedule_start(delivery_id):
         log.warning(f"Could not text receiver for delivery {delivery_id}: {sms_error}")
 
     record = scheduling.start_delivery(delivery_id, eta)
-    log.info(f"Delivery {delivery_id} started by driver {session.get('name')}. SMS sent: {sms_sent}. ETA: {eta}")
+    driver_email = get_auth_header()
+    log.info(f"Delivery {delivery_id} started by driver {driver_email}. SMS sent: {sms_sent}. ETA: {eta}")
 
     return jsonify({
         "status": "ok",
@@ -835,13 +706,13 @@ def api_schedule_complete(delivery_id):
         # Read file contents into memory
         sig_buffer = signature_file.read()
         signature_file.seek(0)  # Reset for local saving
-        
+
         photo_buffers = []
         for photo_file in photo_files:
             photo_buffer = photo_file.read()
             photo_file.seek(0)  # Reset for local saving
             photo_buffers.append(photo_buffer)
-        
+
         # Upload to AES
         aes_result = upload_delivery_photos_to_aes(
             delivery_id=delivery_id,
@@ -849,9 +720,9 @@ def api_schedule_complete(delivery_id):
             signature_buffer=sig_buffer,
             photo_buffers=photo_buffers
         )
-        
+
         log.info(f"AES upload result for delivery {delivery_id}: {len(aes_result['uploaded'])} files processed")
-        
+
     except Exception as e:
         log.error(f"Error uploading to AES: {str(e)}")
         # Continue anyway - local saving will still work
@@ -985,7 +856,10 @@ def api_incoming_confirm():
     shutil.move(slip_path, final_path)
 
     record = inventory.log_packing_slip(job_number, po_number, slip_id)
-    log.info(f"Packing slip {slip_id} filed for Job #{job_number}")
+
+    # Log who confirmed
+    confirmed_by = get_auth_header() or "unknown"
+    log.info(f"Packing slip {slip_id} filed for Job #{job_number} by {confirmed_by}")
 
     return jsonify({"status": "ok", "entry": record})
 
@@ -1016,7 +890,8 @@ def api_incoming_flag():
         attachment_paths=[final_path] if os.path.exists(final_path) else [],
     )
 
-    log.info(f"Packing slip {slip_id} flagged and emailed to PM team. Email sent: {sent}")
+    flagged_by = get_auth_header() or "unknown"
+    log.info(f"Packing slip {slip_id} flagged by {flagged_by} and emailed to PM team. Email sent: {sent}")
     return jsonify({"status": "ok", "email_sent": sent, "email_error": err})
 
 

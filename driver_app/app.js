@@ -13,7 +13,6 @@ let currentIncomingScan = null; // { previewId, file, jobNumberGuess } for the I
 let currentUser = null; // { role: "driver", name } or { role: "admin", email } or { role: "pm", email, name }
 let currentAppMode = null; // "warehouse" or "drivers" - which half of the driver-role app is showing
 
-const ME_URL = "/api/auth/me";
 const LOGIN_URL = "/api/auth/login";
 const LOGOUT_URL = "/api/auth/logout";
 
@@ -1541,30 +1540,15 @@ async function boot() {
   initReviseScreen();
   initSendToPmScreen();
 
-  try {
-    const resp = await fetch(ME_URL, { credentials: "same-origin" });
-    if (resp.ok) {
-      const identity = await resp.json();
-      cacheUser(identity);
-      showRoleMenu();
-    } else {
-      // Explicitly not logged in (401) - clear any stale cache and require login.
-      cacheUser(null);
-      show("screen-login");
-    }
-  } catch (e) {
-    // Network error (offline) - fall back to the last known session so the
-    // app still works for capturing deliveries without signal. This is only
-    // a convenience for an already-logged-in device; a first login still
-    // requires being online.
-    console.warn("Couldn't reach server to verify login (offline?). Using cached session if available.", e);
-    const cached = getCachedUser();
-    if (cached) {
-      currentUser = cached;
-      showRoleMenu();
-    } else {
-      show("screen-login");
-    }
+  // Check for cached user from localStorage
+  // No need to call /api/auth/me — server no longer manages sessions
+  const cached = getCachedUser();
+  if (cached) {
+    cacheUser(cached);  // Restore to currentUser
+    showRoleMenu();
+  } else {
+    // No cached user - require login
+    show("screen-login");
   }
 
   if ("serviceWorker" in navigator) {
