@@ -70,7 +70,7 @@ import qr_ticket
 import scheduling
 import sms
 import ticket_render
-from auth_utils import get_auth_header, AUTH_SERVICE_URL
+from auth_utils import get_auth_header, AUTH_SERVICE_URL, call_auth_service
 from auth_decorators import login_required, admin_required, pm_or_admin_required
 from auth_routes import auth_bp
 
@@ -355,8 +355,8 @@ def api_health():
 @pm_or_admin_required
 def api_schedule_calendar_settings_get():
     try:
-        settings = scheduling.get_calendar_settings()
-        return jsonify({"settings": settings})
+        ics_url = scheduling.get_ics_url()
+        return jsonify({"settings": {"ics_url": ics_url}})
     except Exception as e:
         log.error(f"Calendar settings retrieval failed: {e}")
         return jsonify({"error": str(e)}), 500
@@ -369,7 +369,7 @@ def api_schedule_calendar_settings_post():
     ics_url = data.get("ics_url", "").strip()
 
     try:
-        scheduling.save_calendar_settings({"ics_url": ics_url})
+        scheduling.set_ics_url(ics_url)
         return jsonify({"status": "ok", "ics_url": ics_url})
     except Exception as e:
         log.error(f"Calendar settings save failed: {e}")
@@ -380,21 +380,10 @@ def api_schedule_calendar_settings_post():
 @pm_or_admin_required
 def api_schedule_calendar_upcoming():
     try:
-        events = scheduling.upcoming_calendar_events()
+        events = scheduling.fetch_upcoming_events()
         return jsonify({"events": events})
     except Exception as e:
         log.error(f"Upcoming events retrieval failed: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/schedule")
-@pm_or_admin_required
-def api_schedule_list():
-    try:
-        deliveries = scheduling.list_deliveries()
-        return jsonify({"deliveries": deliveries})
-    except Exception as e:
-        log.error(f"Schedule list failed: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -403,14 +392,17 @@ def api_schedule_list():
 def api_schedule_create():
     data = request.get_json(silent=True) or {}
 
-    required_fields = ["calendar_event_id", "job_number", "receiver_name", "receiver_email", "receiver_phone", "site_address", "assigned_driver", "pm_email"]
+    required_fields = ["job_number", "receiver_name", "receiver_email", "receiver_phone", "site_address", "assigned_driver", "pm_email", "delivery_date"]
     missing = [f for f in required_fields if not data.get(f)]
     if missing:
         return jsonify({"error": f"missing fields: {', '.join(missing)}"}), 400
 
     try:
+        # Generate a calendar_event_uid if not provided (for manual deliveries)
+        calendar_event_uid = data.get("calendar_event_uid") or f"manual_{uuid.uuid4().hex[:8]}"
+        
         delivery = scheduling.create_delivery(
-            calendar_event_id=data["calendar_event_id"],
+            calendar_event_uid=calendar_event_uid,
             job_number=data["job_number"],
             receiver_name=data["receiver_name"],
             receiver_email=data["receiver_email"],
@@ -418,6 +410,7 @@ def api_schedule_create():
             site_address=data["site_address"],
             assigned_driver=data["assigned_driver"],
             pm_email=data["pm_email"],
+            delivery_date=data["delivery_date"],  # Added this
             customer_name=data.get("customer_name"),
             customer_po=data.get("customer_po"),
             job_name=data.get("job_name"),
@@ -427,7 +420,7 @@ def api_schedule_create():
     except Exception as e:
         log.error(f"Schedule creation failed: {e}")
         return jsonify({"error": str(e)}), 500
-
+    
 
 @app.route("/api/schedule/<delivery_id>/ticket", methods=["POST"])
 @pm_or_admin_required
@@ -602,6 +595,44 @@ def api_schedule_pack(delivery_id):
     log.info(f"Delivery {delivery_id} packed by {packed_by}; {removed_count} inventory entr(ies) marked shipped for Job #{delivery['job_number']}")
     return jsonify({"status": "ok", "delivery": record, "inventory_entries_shipped": removed_count})
 
+@app.route("/api/schedule/drivers")
+@pm_or_admin_required
+def api_schedule_drivers():
+    try:
+        # Get auth header from current request
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "not authenticated"}), 401
+        
+        # Call auth-service with correct parameter order
+        users_response, status_code = call_auth_service(
+            "/api/auth/admin/users", 
+            method="GET", 
+            auth_header=auth_header
+        )
+        
+        log.info(f"DEBUG: users_response = {users_response}, status = {status_code}")
+        
+        if status_code != 200 or not users_response or "users" not in users_response:
+            return jsonify({"drivers": []})
+        
+        all_users = users_response.get("users", [])
+        log.info(f"DEBUG: all_users = {all_users}")
+        
+        # Filter for drivers - check if "driver" is in the role
+        drivers = [
+            {"name": u.get("name")} 
+            for u in all_users 
+            if "driver" in u.get("role", "").lower()
+        ]
+        
+        log.info(f"DEBUG: filtered drivers = {drivers}")
+        drivers.sort(key=lambda x: x["name"])
+        
+        return jsonify({"drivers": drivers})
+    except Exception as e:
+        log.error(f"Driver list failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/schedule/driver/today")
 @login_required
