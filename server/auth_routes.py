@@ -4,7 +4,7 @@ Endpoints: /api/auth/login, /api/auth/logout, /api/auth/me
 All authentication is proxied to auth-service on Railway.
 """
 from flask import Blueprint, request, jsonify
-from auth_utils import get_auth_header, verify_auth_with_service
+from auth_utils import get_auth_header, verify_auth_with_service, call_auth_service
 import logging
 
 log = logging.getLogger(__name__)
@@ -83,3 +83,38 @@ def get_me():
         return jsonify({"error": "not logged in"}), 401
 
     return jsonify({"email": auth_info}), 200
+
+@auth_bp.route("/admin/register_user", methods=["POST"])
+def admin_register_user():
+    """Register a new user (admin only)"""
+    auth_info = get_auth_header()
+    if not auth_info:
+        return jsonify({"error": "not logged in"}), 401
+    
+    auth_header = f"Bearer {auth_info}"
+    data = request.get_json(silent=True) or {}
+    result, status = call_auth_service("/api/auth/admin/register_user", "POST", data, auth_header=auth_header)
+    return jsonify(result), status
+
+
+@auth_bp.route("/admin/users", methods=["GET"])
+def admin_list_users():
+    """List all users (admin only)"""
+    auth_info = get_auth_header()
+    if not auth_info:
+        return jsonify({"error": "not logged in"}), 401
+    
+    auth_header = f"Bearer {auth_info}"
+    result, status = call_auth_service("/api/auth/admin/users", "GET", auth_header=auth_header)
+    return jsonify(result), status
+
+@auth_bp.route("/admin/users/<int:user_id>", methods=["DELETE"])
+def admin_delete_user(user_id):
+    """Delete a user (admin only)"""
+    auth_info = get_auth_header()
+    if not auth_info:
+        return jsonify({"error": "not logged in"}), 401
+    
+    auth_header = f"Bearer {auth_info}"
+    result, status = call_auth_service(f"/api/auth/admin/users/{user_id}", "DELETE", auth_header=auth_header)
+    return jsonify(result), status

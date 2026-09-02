@@ -79,3 +79,43 @@ def verify_auth_with_service(email, password):
     except requests.exceptions.RequestException as e:
         log.error(f"Auth service error: {e}")
         return None, 503
+
+def call_auth_service(path, method="GET", data=None, auth_header=None):
+    """Call auth-service endpoint"""
+    url = f"{AUTH_SERVICE_URL}{path}"
+    headers = {"Content-Type": "application/json"}
+    if auth_header:
+        headers["Authorization"] = auth_header
+    
+    try:
+        log.info(f"Calling auth-service: {method} {url} with auth_header={bool(auth_header)}")
+        if method == "GET":
+            resp = requests.get(url, headers=headers, timeout=5)
+        elif method == "POST":
+            resp = requests.post(url, json=data, headers=headers, timeout=5)
+        elif method == "DELETE":
+            resp = requests.delete(url, headers=headers, timeout=5)
+        else:
+            return {"error": "Invalid method"}, 400
+        
+        log.info(f"Auth-service returned status {resp.status_code}")
+        
+        # Try to parse JSON response
+        try:
+            response_data = resp.json()
+        except ValueError:
+            # Response is not JSON - log what we got
+            log.error(f"Non-JSON response from auth-service: status={resp.status_code}, body={resp.text[:500]}")
+            return {"error": f"Invalid response from auth-service: {resp.text[:100]}"}, resp.status_code
+        
+        return response_data, resp.status_code
+        
+    except requests.exceptions.Timeout:
+        log.error("Auth-service request timed out")
+        return {"error": "Auth service timeout"}, 503
+    except requests.exceptions.ConnectionError as e:
+        log.error(f"Could not connect to auth-service: {e}")
+        return {"error": f"Could not connect to auth service: {str(e)}"}, 503
+    except Exception as e:
+        log.error(f"Auth service error: {e}", exc_info=True)
+        return {"error": str(e)}, 500

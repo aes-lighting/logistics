@@ -23,7 +23,11 @@ function show(id) {
 }
 
 async function api(url, opts = {}) {
-  const resp = await fetch(url, { credentials: "same-origin", ...opts });
+  const headers = opts.headers || {};
+  if (currentUser && currentUser.email && !headers.Authorization) {
+    headers.Authorization = `Bearer ${currentUser.email}`;
+  }
+  const resp = await fetch(url, { credentials: "same-origin", ...opts, headers });
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok) {
     const err = new Error(body.error || `Request failed (${resp.status})`);
@@ -201,10 +205,35 @@ async function loadAdminUserList() {
   try {
     const result = await api("/api/auth/admin/users");
     tbody.innerHTML = result.users.length
-      ? result.users.map((u) => `<tr><td>${u.name}</td><td>${u.email}</td><td>${ROLE_LABELS[u.role] || u.role}</td></tr>`).join("")
-      : '<tr><td colspan="3" class="hint">No users registered yet.</td></tr>';
+      ? result.users.map((u) => `
+          <tr>
+            <td>${u.name}</td>
+            <td>${u.email}</td>
+            <td>${ROLE_LABELS[u.role] || u.role}</td>
+            <td>
+              <button class="btn btn-secondary btn-delete-user" data-user-id="${u.user_id}" data-email="${u.email}">Delete</button>
+            </td>
+          </tr>
+        `).join("")
+      : '<tr><td colspan="4" class="hint">No users registered yet.</td></tr>';
+    
+    // Add event listeners to delete buttons
+    document.querySelectorAll(".btn-delete-user").forEach(btn => {
+      btn.addEventListener("click", async (e) => {
+        const userId = e.target.dataset.userId;
+        const email = e.target.dataset.email;
+        if (!confirm(`Delete user ${email}? This cannot be undone.`)) return;
+        
+        try {
+          await api(`/api/auth/admin/users/${userId}`, { method: "DELETE" });
+          await loadAdminUserList();
+        } catch (err) {
+          alert(`Couldn't delete: ${err.message}`);
+        }
+      });
+    });
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="3" class="hint">Couldn't load: ${e.message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="4" class="hint">Couldn't load: ${e.message}</td></tr>`;
   }
 }
 
