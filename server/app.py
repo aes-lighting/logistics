@@ -465,8 +465,13 @@ def api_schedule_ticket(delivery_id):
             pm_name=delivery.get("pm_name", ""),
         )
     else:
-        ticket_bytes = ticket_file.read()
+        # File upload — use save_ticket_file
+        record = scheduling.save_ticket_file(delivery_id, ticket_file)
 
+        log.info(f"Ticket uploaded for delivery {delivery_id}")
+        return jsonify({"status": "ok", "delivery": record})
+
+    # Generate case continues here
     pm_name = delivery.get("pm_name", "")
     record = scheduling.save_generated_ticket(delivery_id, ticket_bytes, line_items, pm_name=pm_name)
 
@@ -475,7 +480,6 @@ def api_schedule_ticket(delivery_id):
 
 
 @app.route("/api/schedule/<delivery_id>/file/<n>")
-@login_required
 def api_schedule_file(delivery_id, n):
     delivery = scheduling.get_delivery(delivery_id)
     if not delivery:

@@ -672,7 +672,7 @@ function openViewModal(d) {
     });
   }
 
-  if (d.ticket_filename) html += `<p class="hint">Ticket:</p><img src="${fileUrl(d.ticket_filename)}">`;
+  if (d.ticket_filename) html += `<p class="hint">Ticket:</p><img src="${fileUrl("ticket")}">`;
   if (d.packed_signature_filename) html += `<p class="hint">Packed By Signature:</p><img src="${fileUrl(d.packed_signature_filename)}">`;
   if (d.signature_filename) html += `<p class="hint">Receiver Signature:</p><img src="${fileUrl(d.signature_filename)}">`;
   (d.photo_filenames || []).forEach((p, i) => {
