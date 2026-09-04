@@ -386,6 +386,15 @@ def api_schedule_calendar_upcoming():
         log.error(f"Upcoming events retrieval failed: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/schedule", methods=["GET"])
+@pm_or_admin_required
+def api_schedule_list():
+    try:
+        deliveries = scheduling.list_deliveries()
+        return jsonify({"deliveries": deliveries})
+    except Exception as e:
+        log.error(f"Schedule list failed: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/schedule", methods=["POST"])
 @pm_or_admin_required
@@ -440,14 +449,24 @@ def api_schedule_ticket(delivery_id):
         except json.JSONDecodeError:
             return jsonify({"error": "line_items must be valid JSON"}), 400
 
-        ticket_bytes = ticket_render.render_ticket(
-            delivery,
+        ticket_bytes = ticket_render.render_ticket_image(
+            job_number=delivery.get("job_number", ""),
+            delivery_date=delivery.get("delivery_date", ""),
+            receiver_name=delivery.get("receiver_name", ""),
+            receiver_email=delivery.get("receiver_email", ""),
+            site_address=delivery.get("site_address", ""),
             line_items=line_items,
+            customer_name=delivery.get("customer_name", ""),
+            customer_po=delivery.get("customer_po", ""),
+            job_name=delivery.get("job_name", ""),
+            delivery_method=delivery.get("delivery_method", ""),
+            pm_name=delivery.get("pm_name", ""),
         )
     else:
         ticket_bytes = ticket_file.read()
 
-    record = scheduling.set_ticket(delivery_id, ticket_bytes)
+    pm_name = delivery.get("pm_name", "")
+    record = scheduling.save_generated_ticket(delivery_id, ticket_bytes, line_items, pm_name=pm_name)
 
     log.info(f"Ticket set for delivery {delivery_id}")
     return jsonify({"status": "ok", "delivery": record})
@@ -485,7 +504,38 @@ def api_schedule_file(delivery_id, n):
             return jsonify({"error": "file not found"}), 404
         return send_file(filepath, mimetype="image/jpeg", as_attachment=False)
 
+@app.route("/api/schedule/<delivery_id>/generate_ticket", methods=["POST"])
+@pm_or_admin_required
+def api_schedule_generate_ticket(delivery_id):
+    delivery = scheduling.get_delivery(delivery_id)
+    if not delivery:
+        return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
 
+    data = request.get_json(silent=True) or {}
+    line_items = data.get("line_items", [])
+
+    try:
+        ticket_bytes = ticket_render.render_ticket_image(
+            job_number=delivery.get("job_number", ""),
+            delivery_date=delivery.get("delivery_date", ""),
+            receiver_name=delivery.get("receiver_name", ""),
+            receiver_email=delivery.get("receiver_email", ""),
+            site_address=delivery.get("site_address", ""),
+            line_items=line_items,
+            customer_name=delivery.get("customer_name", ""),
+            customer_po=delivery.get("customer_po", ""),
+            job_name=delivery.get("job_name", ""),
+            delivery_method=delivery.get("delivery_method", ""),
+            pm_name=delivery.get("pm_name", ""),
+        )
+        pm_name = delivery.get("pm_name", "")
+        record = scheduling.save_generated_ticket(delivery_id, ticket_bytes, line_items, pm_name=pm_name)
+        log.info(f"Ticket generated for delivery {delivery_id}")
+        return jsonify({"status": "ok", "delivery": record})
+    except Exception as e:
+        log.error(f"Ticket generation failed: {e}")
+        return jsonify({"error": str(e)}), 500
+    
 @app.route("/api/schedule/<delivery_id>/revise", methods=["POST"])
 @pm_or_admin_required
 def api_schedule_revise(delivery_id):
