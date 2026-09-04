@@ -17,6 +17,7 @@ uploads and signed outputs live under <BASE_DIR>/schedule_files/<delivery_id>/.
 import json
 import logging
 import os
+import shutil
 import uuid
 from datetime import datetime, timedelta
 
@@ -420,3 +421,20 @@ def complete_delivery(delivery_id, checkoff_confirmed, signed_by, signature_file
 
 def delivery_file_path(delivery_id, filename):
     return os.path.join(FILES_DIR, delivery_id, filename)
+
+def delete_delivery(delivery_id):
+    """Delete a scheduled delivery and all associated files."""
+    store = _load_store()
+    if delivery_id not in store["deliveries"]:
+        return None
+    
+    # Remove the delivery from the store
+    delivery = store["deliveries"].pop(delivery_id)
+    _save_store(store)
+    
+    # Delete associated files
+    delivery_dir = os.path.join(FILES_DIR, delivery_id)
+    if os.path.exists(delivery_dir):
+        shutil.rmtree(delivery_dir)
+    
+    return delivery

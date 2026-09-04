@@ -439,6 +439,8 @@ def api_schedule_ticket(delivery_id):
         return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
 
     ticket_file = request.files.get("ticket")
+    line_items = []
+    
     if not ticket_file:
         if request.form.get("generate_ticket") != "true":
             return jsonify({"error": "missing ticket file"}), 400
@@ -535,8 +537,41 @@ def api_schedule_generate_ticket(delivery_id):
     except Exception as e:
         log.error(f"Ticket generation failed: {e}")
         return jsonify({"error": str(e)}), 500
-    
-@app.route("/api/schedule/<delivery_id>/revise", methods=["POST"])
+
+@app.route("/api/schedule/pms")
+@pm_or_admin_required
+def api_schedule_pms():
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return jsonify({"error": "not authenticated"}), 401
+        
+        users_response, status_code = call_auth_service(
+            "/api/auth/admin/users", 
+            method="GET", 
+            auth_header=auth_header
+        )
+        
+        if status_code != 200 or not users_response or "users" not in users_response:
+            return jsonify({"pms": []})
+        
+        all_users = users_response.get("users", [])
+        
+        # Filter for PMs and admins
+        pms = [
+            {"name": u.get("name"), "email": u.get("email")} 
+            for u in all_users 
+            if "pm" in u.get("role", "").lower() or "admin" in u.get("role", "").lower()
+        ]
+        
+        pms.sort(key=lambda x: x["name"])
+        
+        return jsonify({"pms": pms})
+    except Exception as e:
+        log.error(f"PM list failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/schedule/<delivery_id>/revise_ticket", methods=["POST"])
 @pm_or_admin_required
 def api_schedule_revise(delivery_id):
     delivery = scheduling.get_delivery(delivery_id)
@@ -544,7 +579,33 @@ def api_schedule_revise(delivery_id):
         return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
 
     data = request.get_json(silent=True) or {}
-
+    
+    # If line_items are provided, regenerate the ticket with new line items
+    line_items = data.get("line_items")
+    if line_items is not None:
+        try:
+            ticket_bytes = ticket_render.render_ticket_image(
+                job_number=delivery.get("job_number", ""),
+                delivery_date=delivery.get("delivery_date", ""),
+                receiver_name=delivery.get("receiver_name", ""),
+                receiver_email=delivery.get("receiver_email", ""),
+                site_address=delivery.get("site_address", ""),
+                line_items=line_items,
+                customer_name=delivery.get("customer_name", ""),
+                customer_po=delivery.get("customer_po", ""),
+                job_name=delivery.get("job_name", ""),
+                delivery_method=delivery.get("delivery_method", ""),
+                pm_name=delivery.get("pm_name", ""),
+            )
+            pm_name = delivery.get("pm_name", "")
+            record = scheduling.save_generated_ticket(delivery_id, ticket_bytes, line_items, pm_name=pm_name)
+            log.info(f"Ticket revised for delivery {delivery_id}")
+            return jsonify({"status": "ok", "delivery": record})
+        except Exception as e:
+            log.error(f"Ticket revision failed: {e}")
+            return jsonify({"error": str(e)}), 500
+    
+    # Otherwise, update delivery fields
     updates = {}
     if "job_number" in data:
         updates["job_number"] = data["job_number"]
@@ -569,11 +630,8 @@ def api_schedule_revise(delivery_id):
         return jsonify({"error": "no fields to update"}), 400
 
     record = scheduling.revise_delivery(delivery_id, updates)
-
-    # Log who made the revision
     revised_by = get_auth_header() or "unknown"
     log.info(f"Delivery {delivery_id} revised by {revised_by}: {updates}")
-
     return jsonify({"status": "ok", "delivery": record})
 
 
@@ -944,7 +1002,21 @@ def api_incoming_confirm():
 
     return jsonify({"status": "ok", "entry": record})
 
-
+@app.route("/api/schedule/<delivery_id>", methods=["DELETE"])
+@pm_or_admin_required
+def api_schedule_delete(delivery_id):
+    try:
+        delivery = scheduling.delete_delivery(delivery_id)
+        if not delivery:
+            return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
+        
+        deleted_by = get_auth_header() or "unknown"
+        log.info(f"Delivery {delivery_id} deleted by {deleted_by}")
+        return jsonify({"status": "ok", "message": f"Delivery {delivery_id} deleted"})
+    except Exception as e:
+        log.error(f"Delivery deletion failed: {e}")
+        return jsonify({"error": str(e)}), 500
+    
 @app.route("/api/incoming/flag", methods=["POST"])
 @login_required
 def api_incoming_flag():

@@ -48,6 +48,7 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
 .btn-secondary { background: var(--surface-raised); color: var(--text); border: 1px solid var(--border); }
 .btn-full { width: 100%; padding: 14px; }
 .btn-link { background: none; border: none; color: var(--accent); font-weight: 600; cursor: pointer; }
+.btn-danger { background: var(--warning); color: #14171C; }
 
 /* --- Main layout --- */
 .main-grid {

@@ -431,6 +431,14 @@ async function loadDeliveries() {
         sendBtn.addEventListener("click", () => openSendToPmModal(d));
         actionCell.appendChild(sendBtn);
       }
+      
+      // Delete button — admin/PM only, always shown
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "btn btn-danger";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.style.marginLeft = "6px";
+      deleteBtn.addEventListener("click", () => deleteDelivery(d));
+      actionCell.appendChild(deleteBtn);
 
       tbody.appendChild(tr);
     });
@@ -589,7 +597,7 @@ async function openSendToPmModal(delivery) {
   const select = document.getElementById("send-pm-select");
   select.innerHTML = '<option value="">— Select a PM —</option>';
   try {
-    const result = await api("/api/inventory/pms");
+    const result = await api("/api/schedule/pms");
     result.pms.forEach((pm) => {
       const opt = document.createElement("option");
       opt.value = pm.email;
@@ -617,7 +625,7 @@ function initSendToPmModal() {
       return;
     }
     try {
-      const result = await api(`/api/schedule/${sendPmTargetId}/send_to_pm`, {
+      const result = await api(`/api/schedule/${sendPmTargetId}/send_copy_to_pm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pm_email: pmEmail }),
@@ -679,6 +687,20 @@ function initViewModal() {
   document.getElementById("btn-view-close").addEventListener("click", () => {
     document.getElementById("view-modal").classList.add("hidden");
   });
+}
+
+// ---------- Delete delivery ----------
+
+async function deleteDelivery(delivery) {
+  if (!confirm(`Delete scheduled delivery #${delivery.job_number}? This cannot be undone.`)) {
+    return;
+  }
+  try {
+    await api(`/api/schedule/${delivery.id}`, { method: "DELETE" });
+    await loadDeliveries();
+  } catch (e) {
+    alert(`Couldn't delete: ${e.message}`);
+  }
 }
 
 // ---------- Boot ----------
