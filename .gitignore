@@ -4,4 +4,4 @@ __pycache__/
 *.pyd
 .Python
 *\schedule_store.json
-server/__pycache__/**
+server/__pycache__/**.env 
