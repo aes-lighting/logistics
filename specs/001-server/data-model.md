@@ -56,11 +56,12 @@ Persistence is JSON-on-disk. Two mutable stores + filesystem dirs + legacy inert
   Office, Truck).
 
 ## Invariants
-- Locations per entry may split; total counts must equal `pallet_count` (server
-  currently trusts caller for finalized split — wizard enforced client-side).
+- Locations per entry may split; total counts must equal `pallet_count`.
+  Enforced **server-side** in `POST /api/incoming/finalize` (and client-side in
+  the wizard); each location must be one of the 13 `LOCATIONS`.
 - A delivery is driver-visible only when `status in {packed, en_route}` and it
   matches the driver's name (case-insensitive) — enforced in `deliveries_assigned_to`.
 - Packing a delivery auto-marks matching job-number inventory entries removed
   (`mark_removed_by_job`). Manual Mark Shipped covers partials.
 - No locking/transactions: last-writer-whole-file. Suitable for single-instance
-  small fleet; not safe for clustered deploy.
+  small fleet; not safe for clustered deploy.

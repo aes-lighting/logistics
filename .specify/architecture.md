@@ -63,7 +63,7 @@ central security gap → `specs/004-auth` + `ops/security.md`.
 | Integration | Module | Env keys | Purpose |
 |---|---|---|---|
 | auth-service | `auth_utils.py` | `AUTH_SERVICE_URL` | verify login, list/register/delete users |
-| AES File Service | `app.py` | `AES_API_URL`, `AES_API_KEY` | mirror completed-delivery photos (`SHIP-<id>`) |
+| AES File Service | `app.py` | `AES_API_URL`, `AES_API_KEY` | mirror delivery photos/signature + packing slips + pallet photos into the job's project folder (`POST /api/upload`) |
 | SMTP | `emailer.py` | `SMTP_*` | flag/report/ticket emails |
 | Twilio SMS | `sms.py` | `TWILIO_*` | "driver on the way" texts |
 | Google Maps | `maps.py` | `GOOGLE_MAPS_API_KEY` | driving ETA |
@@ -84,4 +84,4 @@ central security gap → `specs/004-auth` + `ops/security.md`.
 - `send_daily_inventory_report.py` imports `auth` (deleted) → crash.
 - Frontend expects a richer Incoming-Inventory API than the server provides → `specs/001-server/contracts/api.md`.
 - Static file routes: `/` and `/pm` serve index; `<path>` catch-all serves driver_app.
-- `app.py` debug-prints paths and enables no auth on `/api/health` (intended).
+- `app.py` debug-prints paths and enables no auth on `/api/health` (intended).

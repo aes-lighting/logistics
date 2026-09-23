@@ -46,7 +46,9 @@ integrity check → privilege escalation + impersonation at the API layer.
 Mitigations may exist at the network layer (HTTPS + proxy), but the app
 treats an unverified string as an authenticated principal.
 
-### F4 — Frontend/backend contract mismatch (Incoming Inventory + delivery APIs)
+### F4 — Frontend/backend contract mismatch — **RESOLVED by A3 (2026-09-23)**
+All routes below now exist server-side; driver app attaches the Bearer identity. Kept for history.
+
 The frontends call routes the server does not implement, and vice-versa:
 
 - **Frontend calls** (`driver_app/app.js`): `/api/incoming/scan_page`,
@@ -85,4 +87,4 @@ auth-service admin/users call used elsewhere.
 - Inventory link: packing a delivery auto-`mark_removed_by_job`; manual Mark
   Shipped for partials.
 - OCR patterns live in `server/server_config.json` (job + PO), shared across flows.
-- Storage roots are relative (`./incoming`, `./organized`) per `server_config.json`.
+- Storage roots are relative (`./incoming`, `./organized`) per `server_config.json`.

@@ -8,8 +8,9 @@ from drivers' phones. Because the app itself tags each photo as "ticket" or
 to guess anything the way the old folder-watching script did — it just reads
 the job number off the ticket via OCR and files the whole delivery.
 
-NOW INTEGRATED: Photos are also automatically uploaded to the AES File Service
-at http://71.172.107.128:3001 for centralized storage.
+NOW INTEGRATED: completed-delivery photos/signature and received packing
+slips + pallet photos are mirrored to the AES File Service (AES_API_URL,
+POST /api/upload) into the job's project folder.
 
 Endpoints:
     GET  /                       -> serves the driver PWA
@@ -38,7 +39,14 @@ Endpoints:
     require login:
     POST /api/incoming/scan       -> upload one packing slip photo, get OCR guess back
     POST /api/incoming/confirm    -> confirm/edit job number, file the slip
-    POST /api/incoming/flag       -> flag a slip as having no/bad job number, emails PM team
+    POST /api/incoming/flag       -> flag a slip (legacy slip_id or wizard session_id), emails PM team
+
+    Incoming Inventory wizard (what driver_app actually calls; spec 005):
+    POST /api/incoming/scan_page     -> add a slip page to a session, OCR guesses back
+    POST /api/incoming/confirm_job   -> confirm job/PO + resolve PM (400 needs_pm if unknown)
+    POST /api/incoming/pallet_photo  -> one photo per pallet
+    POST /api/incoming/finalize      -> locations split + comment -> ledger entry, QR PDF, PM email
+    GET  /api/inventory/<id>/qr.pdf  -> printable QR receiving label
 
 Run (development):
     python3 app.py
@@ -136,133 +144,89 @@ app.register_blueprint(auth_bp)
 
 
 # ===== AES File Service Helper Functions =====
-def generate_aes_filename(directory, shipment_id, original_filename):
+# Contract (AES File Service, Node/Express on the AES Windows server — see
+# specs/007-integrations/spec.md):
+#   POST {AES_API_URL}/api/upload        header X-API-Key
+#   multipart: file, projectNumber (5-digit job number -> project folder),
+#              fileType (key in the service's config/file-types.json),
+#              filename (optional; saved name — an existing file is overwritten)
+#   200 {success:true, fileName, destinationPath, projectName, ...}
+#   400 {success:false, error|details}   401 invalid key   404 unknown route
+# The service files into <project folder>\<fileTypes[fileType].destination>.
+AES_FILE_TYPE_DELIVERY_PHOTO = "delivery_photo"
+AES_FILE_TYPE_INTAKE_PHOTO = "intake_photo"
+AES_FILE_TYPE_PACKING_SLIP = "packing_slip"
+
+
+def aes_filename(prefix, job_number, label, original_filename):
+    """Unique, filesystem-safe name: e.g. Delivery_Job12345_20260923-143022_ab12cd34_photo-1.jpg"""
+    ext = os.path.splitext(original_filename or "")[1].lower() or ".jpg"
+    safe = lambda v: re.sub(r"[^A-Za-z0-9\-]", "", str(v))
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{safe(prefix)}_Job{safe(job_number)}_{stamp}_{os.urandom(4).hex()}_{safe(label)}{ext}"
+
+
+def upload_to_aes(file_buffer, job_number, file_type, filename):
     """
-    Generate filename in AES format: DIRECTORY_SHIPMENT_TIMESTAMP_HASH.ext
-    Example: DELIVERY_SHIP-12345_20260828T143022_abc12345.jpg
-    """
-    # Get file extension
-    name_parts = original_filename.rsplit('.', 1)
-    if len(name_parts) < 2:
-        ext = ''
-    else:
-        ext = '.' + name_parts[1].lower()
-
-    # Generate timestamp (YYYYMMDDTHHmmss format)
-    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-
-    # Generate short hash (8 characters)
-    random_bytes = os.urandom(4)
-    hash_suffix = random_bytes.hex()[:8]
-
-    # Format: DIRECTORY_SHIPMENT_TIMESTAMP_HASH.ext
-    filename = f"{directory}_{shipment_id}_{timestamp}_{hash_suffix}{ext}"
-    return filename
-
-
-def upload_to_aes(file_buffer, directory, shipment_id, original_filename, metadata=None):
-    """
-    Upload a photo to the AES File Service.
-
-    Returns:
-        {'success': True, 'file': '...', 'url': '...'} on success
-        {'success': False, 'error': '...'} on failure
+    Upload one file to the AES File Service. Never raises.
+    Returns {'success': True, 'file': <saved name>, 'path': <server path>}
+         or {'success': False, 'error': '...'}
     """
     try:
-        # Generate the AES-formatted filename
-        aes_filename = generate_aes_filename(directory, shipment_id, original_filename)
-
-        # Prepare multipart form data
-        files = {'file': (aes_filename, file_buffer, 'image/jpeg')}
-
-        # ✅ CORRECTED PARAMETERS per API spec:
-        # - logisticsId: REQUIRED (shipment ID)
-        # - directoryPath: REQUIRED (which directory to save to)
-        data = {
-            'logisticsId': shipment_id,     # REQUIRED - tells API the job/shipment ID
-            'directoryPath': directory       # REQUIRED - tells API which directory (INTAKE, DELIVERY, etc)
-        }
-
-        if metadata:
-            data['metadata'] = json.dumps(metadata)
-
-        headers = {'X-API-Key': AES_API_KEY}
-
-        # ✅ CORRECTED ENDPOINT: /api/files/upload (not /api/upload)
+        ext = os.path.splitext(filename)[1].lower()
+        content_type = {".png": "image/png", ".pdf": "application/pdf"}.get(ext, "image/jpeg")
         response = requests.post(
-            f"{AES_API_URL}/api/files/upload",  # FIXED: Added /files
-            files=files,
-            data=data,
-            headers=headers,
-            timeout=30
+            f"{AES_API_URL.rstrip('/')}/api/upload",
+            files={"file": (filename, file_buffer, content_type)},
+            data={"projectNumber": str(job_number).strip(), "fileType": file_type, "filename": filename},
+            headers={"X-API-Key": AES_API_KEY},
+            timeout=30,
         )
-
-        if response.status_code == 200:
-            result = response.json()
-            # Response structure: {"success": true, "data": {fileId, fileName, filePath, size, uploadedAt}}
-            file_data = result.get('data', {})
-            log.info(f"✓ AES upload success: {file_data.get('fileName')}")
-            return {
-                'success': True,
-                'file': file_data.get('fileName'),
-                'fileId': file_data.get('fileId'),
-                'size': file_data.get('size'),
-                'url': f"{AES_API_URL}/api/files/{file_data.get('fileId')}"
-            }
-        else:
-            log.warning(f"AES upload failed (HTTP {response.status_code}): {response.text}")
-            return {'success': False, 'error': f"HTTP {response.status_code}: {response.text}"}
-
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if response.status_code == 200 and body.get("success"):
+            log.info(f"✓ AES upload: {body.get('fileName')} -> {body.get('destinationPath')}")
+            return {"success": True, "file": body.get("fileName"), "path": body.get("destinationPath")}
+        err = body.get("error") or response.text[:300]
+        if body.get("details"):
+            err = f"{err}: {body['details']}"
+        log.warning(f"AES upload failed (HTTP {response.status_code}) for {filename}: {err}")
+        return {"success": False, "error": f"HTTP {response.status_code}: {err}"}
     except Exception as e:
-        log.warning(f"AES upload error: {str(e)}")
-        return {'success': False, 'error': str(e)}
+        log.warning(f"AES upload error for {filename}: {e}")
+        return {"success": False, "error": str(e)}
 
 
-def upload_delivery_photos_to_aes(delivery_id, job_number, signature_buffer, photo_buffers):
+def upload_files_to_aes(job_number, items):
     """
-    Upload all photos from a completed delivery to AES.
-
-    Returns:
-        {'success': True/False, 'uploaded': [...], 'failed': [...]}
+    items: [(file_type, filename, bytes)]. Returns
+    {'success': all ok, 'uploaded': [...ok results], 'failed': [...errors]}
     """
-    results = {
-        'success': True,
-        'uploaded': [],
-        'failed': []
-    }
-
-    # Construct shipment ID for AES (used across all uploads for this delivery)
-    shipment_id = f"SHIP-{delivery_id}"
-
-    # Upload signature
-    sig_result = upload_to_aes(
-        signature_buffer,
-        'DELIVERY',
-        shipment_id,
-        'signature.jpg',
-        {'type': 'signature', 'job_number': job_number}
-    )
-    results['uploaded'].append(sig_result)
-    if not sig_result['success']:
-        results['success'] = False
-        log.warning(f"Signature upload failed for delivery {delivery_id}: {sig_result['error']}")
-
-    # Upload delivery photos
-    for i, photo_buffer in enumerate(photo_buffers):
-        photo_result = upload_to_aes(
-            photo_buffer,
-            'DELIVERY',
-            shipment_id,
-            f"delivery-photo-{i+1}.jpg",
-            {'type': 'delivery_photo', 'photo_number': i+1, 'job_number': job_number}
-        )
-        results['uploaded'].append(photo_result)
-        if not photo_result['success']:
-            results['success'] = False
-            log.warning(f"Photo {i+1} upload failed for delivery {delivery_id}: {photo_result['error']}")
-
-    log.info(f"AES upload summary for delivery {delivery_id}: {len([u for u in results['uploaded'] if u['success']])} succeeded, {len([u for u in results['uploaded'] if not u['success']])} failed")
+    results = {"success": True, "uploaded": [], "failed": []}
+    for file_type, filename, buf in items:
+        r = upload_to_aes(buf, job_number, file_type, filename)
+        if r["success"]:
+            results["uploaded"].append(r)
+        else:
+            results["success"] = False
+            results["failed"].append({"file": filename, "error": r["error"]})
+    log.info(f"AES upload summary for Job #{job_number}: {len(results['uploaded'])} ok, {len(results['failed'])} failed")
     return results
+
+
+def upload_delivery_photos_to_aes(delivery_id, job_number, signature_buffer, photo_buffers,
+                                  signature_filename="signature.png", photo_filenames=None):
+    """Mirror a completed scheduled delivery's signature + photos to the job's project folder."""
+    photo_filenames = photo_filenames or []
+    items = [(AES_FILE_TYPE_DELIVERY_PHOTO,
+              aes_filename("Delivery", job_number, "signature", signature_filename),
+              signature_buffer)]
+    for i, buf in enumerate(photo_buffers, start=1):
+        orig = photo_filenames[i - 1] if i - 1 < len(photo_filenames) else "photo.jpg"
+        items.append((AES_FILE_TYPE_DELIVERY_PHOTO, aes_filename("Delivery", job_number, f"photo-{i}", orig), buf))
+    return upload_files_to_aes(job_number, items)
 
 
 def load_config():
@@ -490,34 +454,50 @@ def api_schedule_ticket(delivery_id):
 
 @app.route("/api/schedule/<delivery_id>/file/<n>")
 def api_schedule_file(delivery_id, n):
+    """
+    Serve a file belonging to a scheduled delivery. `n` may be:
+      - "ticket"                 -> the current ticket image
+      - an int index             -> photo_filenames[n], then the signature at len(photos)
+      - a stored filename        -> ticket_filename / photo / signature / packed signature
+                                    (what driver_app + pm_portal actually send; WS-4)
+    Only filenames recorded on the delivery are served — never arbitrary paths.
+    No auth decorator (unchanged from HEAD): this URL is used as an <img src>,
+    which can't carry the Bearer header. Tracked under spec 004.
+    """
     delivery = scheduling.get_delivery(delivery_id)
     if not delivery:
         return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
 
+    photo_filenames = delivery.get("photo_filenames") or []
+    signature_filename = delivery.get("signature_filename")
+    filename = None
+
     if n == "ticket":
-        filepath = scheduling.ticket_file_path(delivery_id)
-        if not os.path.exists(filepath):
-            return jsonify({"error": "no ticket on file"}), 404
-        return send_file(filepath, mimetype="image/jpeg", as_attachment=False)
-    else:
-        try:
-            n_int = int(n)
-        except ValueError:
-            return jsonify({"error": "invalid file index"}), 400
-
-        photo_filenames = delivery.get("photo_filenames") or []
-        signature_filename = delivery.get("signature_filename")
-
+        filename = delivery.get("ticket_filename")
+    elif n.isdigit():
+        n_int = int(n)
         if n_int < len(photo_filenames):
-            filepath = scheduling.delivery_file_path(delivery_id, photo_filenames[n_int])
+            filename = photo_filenames[n_int]
         elif n_int == len(photo_filenames) and signature_filename:
-            filepath = scheduling.delivery_file_path(delivery_id, signature_filename)
-        else:
-            return jsonify({"error": "file not found"}), 404
+            filename = signature_filename
+    else:
+        allowed = set(photo_filenames) | {
+            delivery.get("ticket_filename"),
+            signature_filename,
+            delivery.get("packed_signature_filename"),
+        }
+        allowed.discard(None)
+        if n in allowed:
+            filename = n
 
-        if not os.path.exists(filepath):
-            return jsonify({"error": "file not found"}), 404
-        return send_file(filepath, mimetype="image/jpeg", as_attachment=False)
+    if not filename:
+        return jsonify({"error": "file not found"}), 404
+    filepath = scheduling.delivery_file_path(delivery_id, filename)
+    if not os.path.isfile(filepath):
+        return jsonify({"error": "file not found"}), 404
+    mimetype = "image/png" if filename.lower().endswith(".png") else "image/jpeg"
+    return send_file(filepath, mimetype=mimetype, as_attachment=False)
+
 
 @app.route("/api/schedule/<delivery_id>/generate_ticket", methods=["POST"])
 @pm_or_admin_required
@@ -551,38 +531,51 @@ def api_schedule_generate_ticket(delivery_id):
         log.error(f"Ticket generation failed: {e}")
         return jsonify({"error": str(e)}), 500
 
+def _list_pms():
+    """
+    PMs + admins from auth-service, as [{name, email}] sorted by name.
+    Falls back to PM emails already memoized in inventory's job->PM directory
+    if auth-service is unreachable or refuses the caller (e.g. a warehouse user).
+    """
+    pms = []
+    auth_header = request.headers.get("Authorization")
+    if auth_header:
+        users_response, status_code = call_auth_service(
+            "/api/auth/admin/users", method="GET", auth_header=auth_header
+        )
+        if status_code == 200 and users_response and "users" in users_response:
+            pms = [
+                {"name": u.get("name") or u.get("email"), "email": u.get("email")}
+                for u in users_response.get("users", [])
+                if "pm" in (u.get("role") or "").lower() or "admin" in (u.get("role") or "").lower()
+            ]
+    if not pms:
+        known = sorted(set(inventory._load_store()["job_pm_directory"].values()) - {None, ""})
+        pms = [{"name": e, "email": e} for e in known]
+    pms.sort(key=lambda x: (x["name"] or "").lower())
+    return pms
+
+
 @app.route("/api/schedule/pms")
 @pm_or_admin_required
 def api_schedule_pms():
     try:
-        auth_header = request.headers.get("Authorization")
-        if not auth_header:
-            return jsonify({"error": "not authenticated"}), 401
-        
-        users_response, status_code = call_auth_service(
-            "/api/auth/admin/users", 
-            method="GET", 
-            auth_header=auth_header
-        )
-        
-        if status_code != 200 or not users_response or "users" not in users_response:
-            return jsonify({"pms": []})
-        
-        all_users = users_response.get("users", [])
-        
-        # Filter for PMs and admins
-        pms = [
-            {"name": u.get("name"), "email": u.get("email")} 
-            for u in all_users 
-            if "pm" in u.get("role", "").lower() or "admin" in u.get("role", "").lower()
-        ]
-        
-        pms.sort(key=lambda x: x["name"])
-        
-        return jsonify({"pms": pms})
+        return jsonify({"pms": _list_pms()})
     except Exception as e:
         log.error(f"PM list failed: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/inventory/pms")
+@login_required
+def api_inventory_pms():
+    """Driver-app PM picker (Incoming wizard needs_pm + Warehouse Send to PM)."""
+    try:
+        return jsonify({"pms": _list_pms()})
+    except Exception as e:
+        log.error(f"PM list failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/schedule/<delivery_id>/revise_ticket", methods=["POST"])
 @pm_or_admin_required
@@ -648,22 +641,19 @@ def api_schedule_revise(delivery_id):
     return jsonify({"status": "ok", "delivery": record})
 
 
-@app.route("/api/schedule/<delivery_id>/send_copy_to_pm", methods=["POST"])
-@pm_or_admin_required
-def api_schedule_send_copy_to_pm(delivery_id):
+def _send_ticket_copy_to_pm(delivery_id):
     delivery = scheduling.get_delivery(delivery_id)
     if not delivery:
-        return jsonify({"error": f"no scheduled delivery found for id {delivery_id}"}), 404
+        return jsonify({"sent": False, "error": f"no scheduled delivery found for id {delivery_id}"}), 404
 
     data = request.get_json(silent=True) or {}
-    recipient_pm_email = data.get("pm_email")
-
+    recipient_pm_email = (data.get("pm_email") or "").strip()
     if not recipient_pm_email:
-        return jsonify({"error": "missing pm_email"}), 400
+        return jsonify({"sent": False, "error": "missing pm_email"}), 400
 
     ticket_path = scheduling.ticket_file_path(delivery_id)
-    if not os.path.exists(ticket_path):
-        return jsonify({"error": "ticket not yet set"}), 400
+    if not ticket_path or not os.path.exists(ticket_path):
+        return jsonify({"sent": False, "error": "ticket not yet set"}), 400
 
     sent, err = emailer.send_flag_email(
         to_addr=recipient_pm_email,
@@ -671,13 +661,32 @@ def api_schedule_send_copy_to_pm(delivery_id):
         body_text=f"Forwarding ticket for Job #{delivery['job_number']}.",
         attachment_paths=[ticket_path],
     )
-
     if not sent:
         log.error(f"Failed to send ticket copy to {recipient_pm_email}: {err}")
-        return jsonify({"status": "error", "error": err}), 500
+        return jsonify({"status": "error", "sent": False, "error": err}), 500
 
-    log.info(f"Ticket for delivery {delivery_id} sent to {recipient_pm_email}")
-    return jsonify({"status": "ok"})
+    log.info(f"Ticket for delivery {delivery_id} sent to {recipient_pm_email} by {get_auth_header() or 'unknown'}")
+    return jsonify({"status": "ok", "sent": True})
+
+
+@app.route("/api/schedule/<delivery_id>/send_copy_to_pm", methods=["POST"])
+@pm_or_admin_required
+def api_schedule_send_copy_to_pm(delivery_id):
+    """PM portal route."""
+    return _send_ticket_copy_to_pm(delivery_id)
+
+
+@app.route("/api/schedule/<delivery_id>/send_to_pm", methods=["POST"])
+@login_required
+def api_schedule_send_to_pm(delivery_id):
+    """Driver-app (Warehouse / Ready to Pack) route — warehouse staff aren't PMs, so login only."""
+    return _send_ticket_copy_to_pm(delivery_id)
+
+
+@app.route("/api/schedule/warehouse/ready_to_pack")
+@login_required
+def api_schedule_ready_to_pack():
+    return jsonify({"deliveries": scheduling.deliveries_ready_to_pack()})
 
 
 @app.route("/api/schedule/<delivery_id>/pack", methods=["POST"])
@@ -870,13 +879,13 @@ def api_schedule_complete(delivery_id):
             delivery_id=delivery_id,
             job_number=delivery["job_number"],
             signature_buffer=sig_buffer,
-            photo_buffers=photo_buffers
+            photo_buffers=photo_buffers,
+            signature_filename=signature_file.filename or "signature.png",
+            photo_filenames=[p.filename for p in photo_files],
         )
-
-        log.info(f"AES upload result for delivery {delivery_id}: {len(aes_result['uploaded'])} files processed")
-
     except Exception as e:
         log.error(f"Error uploading to AES: {str(e)}")
+        aes_result = {"success": False, "uploaded": [], "failed": [{"error": str(e)}]}
         # Continue anyway - local saving will still work
 
     # ===== CONTINUE WITH LOCAL SAVING =====
@@ -919,7 +928,11 @@ def api_schedule_complete(delivery_id):
             log.error(f"Failed to email signed ticket to {recipient}: {err}")
 
     log.info(f"Scheduled delivery {delivery_id} completed and emailed to PM + receiver.")
-    return jsonify({"status": "ok", "delivery": record})
+    return jsonify({
+        "status": "ok",
+        "delivery": record,
+        "file_service": {"success": aes_result["success"], "uploaded": len(aes_result["uploaded"]), "failed": aes_result["failed"]},
+    })
 
 
 ### --- Inventory (location tracking + Excel report) --- ###
@@ -1002,15 +1015,20 @@ def api_incoming_confirm():
     if not os.path.exists(slip_path):
         return jsonify({"error": "slip not found"}), 404
 
-    dest_dir = os.path.join(CFG["incoming_slip_subfolder"], f"Job_{job_number}")
+    dest_dir = _slip_job_dir(job_number)
     final_path = unique_destination(dest_dir, f"packing_slip_{slip_id}")
     os.makedirs(os.path.dirname(final_path), exist_ok=True)
     shutil.move(slip_path, final_path)
 
-    record = inventory.log_packing_slip(job_number, po_number, slip_id)
-
     # Log who confirmed
     confirmed_by = get_auth_header() or "unknown"
+    record = inventory.add_entry(
+        job_number=job_number,
+        po_number=po_number,
+        confirmed_by=confirmed_by,
+        slip_photo_filenames=[os.path.basename(final_path)],
+        pm_email=inventory.get_pm_for_job(job_number),
+    )
     log.info(f"Packing slip {slip_id} filed for Job #{job_number} by {confirmed_by}")
 
     return jsonify({"status": "ok", "entry": record})
@@ -1033,34 +1051,354 @@ def api_schedule_delete(delivery_id):
 @app.route("/api/incoming/flag", methods=["POST"])
 @login_required
 def api_incoming_flag():
+    """
+    Flag a packing slip that has no/bad job number. Accepts either the
+    wizard body {session_id, reason, note, staff} (flags every scanned page)
+    or the legacy single-shot body {slip_id, reason}.
+    """
     data = request.get_json(silent=True) or {}
-    slip_id = data.get("slip_id", "").strip()
-    reason = data.get("reason", "no job number").strip()
-
-    if not slip_id:
-        return jsonify({"error": "missing slip_id"}), 400
-
-    slip_path = os.path.join(CFG["incoming_staging_dir"], slip_id)
-    if not os.path.exists(slip_path):
-        return jsonify({"error": "slip not found"}), 404
+    session_id = (data.get("session_id") or "").strip()
+    slip_id = (data.get("slip_id") or "").strip()
+    reason = (data.get("reason") or "no job number").strip()
+    note = (data.get("note") or "").strip()
+    flagged_by = (data.get("staff") or "").strip() or get_auth_header() or "unknown"
 
     flagged_dir = os.path.join(CFG["dest_dir"], CFG.get("flagged_slips_folder", "flagged_packing_slips"))
-    final_path = unique_destination(flagged_dir, slip_id)
-    os.makedirs(os.path.dirname(final_path), exist_ok=True)
-    shutil.move(slip_path, final_path)
+    os.makedirs(flagged_dir, exist_ok=True)
+    moved = []
 
+    if session_id:
+        sess = _load_incoming_session(session_id)
+        if not sess:
+            return jsonify({"error": "incoming session not found"}), 404
+        sdir = _incoming_session_dir(session_id)
+        for name in sess["pages"]:
+            src = os.path.join(sdir, name)
+            if os.path.exists(src):
+                dst = unique_destination(flagged_dir, f"{session_id[:8]}_{name}")
+                shutil.move(src, dst)
+                moved.append(dst)
+        shutil.rmtree(sdir, ignore_errors=True)
+    elif slip_id:
+        if os.path.basename(slip_id) != slip_id:
+            return jsonify({"error": "invalid slip_id"}), 400
+        slip_path = os.path.join(CFG["incoming_staging_dir"], slip_id)
+        if not os.path.exists(slip_path):
+            return jsonify({"error": "slip not found"}), 404
+        dst = unique_destination(flagged_dir, slip_id)
+        shutil.move(slip_path, dst)
+        moved.append(dst)
+    else:
+        return jsonify({"error": "missing session_id or slip_id"}), 400
+
+    body = f"A packing slip could not be processed.\nReason: {reason}\nFlagged by: {flagged_by}"
+    if note:
+        body += f"\nNote: {note}"
     sent, err = emailer.send_flag_email(
         to_addr=CFG.get("flag_alert_email_to", "PMteam@aes-energy.com"),
         subject="[AES Logistics] Flagged packing slip — could not read job number",
-        body_text=f"A packing slip could not be processed. Reason: {reason}.",
-        attachment_paths=[final_path] if os.path.exists(final_path) else [],
+        body_text=body,
+        attachment_paths=moved,
+    )
+    log.info(f"Packing slip ({session_id or slip_id}) flagged by {flagged_by}; {len(moved)} page(s). Email sent: {sent}")
+    return jsonify({"status": "ok", "email_sent": sent, "email_error": err})
+
+
+### --- Incoming Inventory wizard (session-based; spec 005 / contracts/api.md) --- ###
+#
+# The driver app's Incoming Inventory flow is a multi-step wizard:
+#   scan_page (xN) -> confirm_job -> pallet_photo (xN) -> finalize   (or -> flag)
+# Session state lives on disk under <incoming_staging_dir>/<session_id>/ so it
+# survives across gunicorn workers (in-memory state would not).
+
+_SESSION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _incoming_session_dir(session_id):
+    return os.path.join(CFG["incoming_staging_dir"], session_id)
+
+
+def _load_incoming_session(session_id):
+    if not session_id or not _SESSION_ID_RE.match(session_id):
+        return None
+    path = os.path.join(_incoming_session_dir(session_id), "session.json")
+    if not os.path.isfile(path):
+        return None
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def _save_incoming_session(sess):
+    sdir = _incoming_session_dir(sess["session_id"])
+    os.makedirs(sdir, exist_ok=True)
+    tmp = os.path.join(sdir, "session.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(sess, f, indent=2)
+    os.replace(tmp, os.path.join(sdir, "session.json"))
+
+
+def _slip_job_dir(job_number):
+    safe_job = re.sub(r"[^A-Za-z0-9\-_]", "_", job_number)
+    return os.path.join(CFG["dest_dir"], CFG["incoming_slip_subfolder"], f"Job_{safe_job}")
+
+
+def _uploaded_photo(field="photo"):
+    return request.files.get(field) or request.files.get("slip")
+
+
+@app.route("/api/incoming/scan_page", methods=["POST"])
+@login_required
+def api_incoming_scan_page():
+    """
+    multipart: photo (or slip), session_id? -> {session_id, page_count, job_number_guess, po_number_guess}
+    First call (no session_id) opens a session. Guesses are sticky: the first
+    page that yields a job/PO number wins.
+    """
+    photo = _uploaded_photo()
+    if not photo:
+        return jsonify({"error": "missing 'photo' file"}), 400
+
+    session_id = (request.form.get("session_id") or "").strip()
+    sess = _load_incoming_session(session_id) if session_id else None
+    if session_id and not sess:
+        return jsonify({"error": "incoming session not found"}), 404
+    if not sess:
+        sess = {
+            "session_id": uuid.uuid4().hex,
+            "created_at": datetime.now().isoformat(),
+            "created_by": get_auth_header() or "unknown",
+            "status": "scanning",
+            "pages": [],
+            "pallet_photos": [],
+            "job_number_guess": None,
+            "po_number_guess": None,
+        }
+    if sess["status"] not in ("scanning", "confirmed"):
+        return jsonify({"error": f"session is {sess['status']}"}), 409
+
+    sdir = _incoming_session_dir(sess["session_id"])
+    os.makedirs(sdir, exist_ok=True)
+    page_name = f"page_{len(sess['pages']) + 1}.jpg"
+    page_path = os.path.join(sdir, page_name)
+    photo.save(page_path)
+    sess["pages"].append(page_name)
+
+    if not sess["job_number_guess"]:
+        sess["job_number_guess"] = extract_job_number(page_path, CFG["job_number_pattern"]) if CFG.get("job_number_pattern") else None
+    if not sess["po_number_guess"]:
+        sess["po_number_guess"] = extract_po_number(page_path, CFG["po_number_pattern"])
+    _save_incoming_session(sess)
+
+    return jsonify({
+        "status": "ok",
+        "session_id": sess["session_id"],
+        "page_count": len(sess["pages"]),
+        "job_number_guess": sess["job_number_guess"],
+        "po_number_guess": sess["po_number_guess"],
+    })
+
+
+@app.route("/api/incoming/confirm_job", methods=["POST"])
+@login_required
+def api_incoming_confirm_job():
+    """
+    JSON {session_id, job_number, po_number?, staff?, pm_email?}
+    Resolves the owning PM from pm_email or the job->PM directory; if neither,
+    returns 400 {"error":"needs_pm"} so the app shows its PM picker.
+    """
+    data = request.get_json(silent=True) or {}
+    sess = _load_incoming_session((data.get("session_id") or "").strip())
+    if not sess:
+        return jsonify({"error": "incoming session not found"}), 404
+    if not sess["pages"]:
+        return jsonify({"error": "scan at least one page first"}), 400
+    if sess["status"] == "finalized":
+        return jsonify({"error": "session already finalized"}), 409
+
+    job_number = (data.get("job_number") or "").strip()
+    if not job_number:
+        return jsonify({"error": "missing job_number"}), 400
+    po_number = (data.get("po_number") or "").strip()
+
+    pm_email = (data.get("pm_email") or "").strip()
+    if pm_email:
+        inventory.set_pm_for_job(job_number, pm_email)
+    else:
+        pm_email = inventory.get_pm_for_job(job_number)
+    if not pm_email:
+        return jsonify({"error": "needs_pm"}), 400
+
+    sess.update({
+        "status": "confirmed",
+        "job_number": job_number,
+        "po_number": po_number,
+        "pm_email": pm_email,
+        "staff": (data.get("staff") or "").strip() or get_auth_header() or "unknown",
+        "confirmed_at": datetime.now().isoformat(),
+    })
+    _save_incoming_session(sess)
+    return jsonify({"status": "ok", "session_id": sess["session_id"], "pm_email": pm_email})
+
+
+@app.route("/api/incoming/pallet_photo", methods=["POST"])
+@login_required
+def api_incoming_pallet_photo():
+    """multipart: session_id, photo -> {pallet_photo_count}"""
+    sess = _load_incoming_session((request.form.get("session_id") or "").strip())
+    if not sess:
+        return jsonify({"error": "incoming session not found"}), 404
+    if sess["status"] != "confirmed":
+        return jsonify({"error": "confirm the job number before adding pallet photos"}), 409
+    photo = _uploaded_photo()
+    if not photo:
+        return jsonify({"error": "missing 'photo' file"}), 400
+
+    name = f"pallet_{len(sess['pallet_photos']) + 1}.jpg"
+    photo.save(os.path.join(_incoming_session_dir(sess["session_id"]), name))
+    sess["pallet_photos"].append(name)
+    _save_incoming_session(sess)
+    return jsonify({"status": "ok", "pallet_photo_count": len(sess["pallet_photos"])})
+
+
+@app.route("/api/incoming/finalize", methods=["POST"])
+@login_required
+def api_incoming_finalize():
+    """
+    JSON {session_id, pallet_count, locations:[{location,count}], comment?}
+    -> {entry, qr_pdf_url, email_sent}
+    Server-side gates (previously client-only): one photo per pallet, every
+    location is one of inventory.LOCATIONS, and split counts sum to pallet_count.
+    """
+    data = request.get_json(silent=True) or {}
+    sess = _load_incoming_session((data.get("session_id") or "").strip())
+    if not sess:
+        return jsonify({"error": "incoming session not found"}), 404
+    if sess["status"] != "confirmed":
+        return jsonify({"error": "confirm the job number before finalizing"}), 409
+
+    try:
+        pallet_count = int(data.get("pallet_count"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "pallet_count must be an integer"}), 400
+    if pallet_count < 1:
+        return jsonify({"error": "pallet_count must be at least 1"}), 400
+    if len(sess["pallet_photos"]) < pallet_count:
+        return jsonify({"error": f"expected {pallet_count} pallet photo(s), got {len(sess['pallet_photos'])}"}), 400
+
+    locations = []
+    for row in data.get("locations") or []:
+        loc = (row or {}).get("location")
+        try:
+            count = int((row or {}).get("count"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "each location needs an integer count"}), 400
+        if loc not in inventory.LOCATIONS:
+            return jsonify({"error": f"unknown location: {loc}"}), 400
+        if count < 1:
+            return jsonify({"error": "location counts must be at least 1"}), 400
+        locations.append({"location": loc, "count": count})
+    if not locations:
+        return jsonify({"error": "at least one location is required"}), 400
+    if sum(l["count"] for l in locations) != pallet_count:
+        return jsonify({"error": "location counts must add up to the pallet count"}), 400
+
+    # File slip pages + pallet photos under Incoming_Packing_Slips/Job_<n>/
+    job_number = sess["job_number"]
+    sdir = _incoming_session_dir(sess["session_id"])
+    job_dir = _slip_job_dir(job_number)
+    os.makedirs(job_dir, exist_ok=True)
+    prefix = sess["session_id"][:8]
+
+    def _file(names):
+        out = []
+        for name in names:
+            src = os.path.join(sdir, name)
+            if os.path.exists(src):
+                dst = unique_destination(job_dir, f"{prefix}_{name}")
+                shutil.move(src, dst)
+                out.append(os.path.basename(dst))
+        return out
+
+    slip_files = _file(sess["pages"])
+    pallet_files = _file(sess["pallet_photos"])
+
+    entry = inventory.add_entry(
+        job_number=job_number,
+        po_number=sess.get("po_number", ""),
+        confirmed_by=sess.get("staff") or "unknown",
+        slip_photo_filenames=slip_files,
+        pm_email=sess["pm_email"],
+        pallet_count=pallet_count,
+        pallet_photo_filenames=pallet_files,
+        locations=locations,
+        comment=(data.get("comment") or "").strip(),
     )
 
-    flagged_by = get_auth_header() or "unknown"
-    log.info(f"Packing slip {slip_id} flagged by {flagged_by} and emailed to PM team. Email sent: {sent}")
-    return jsonify({"status": "ok", "email_sent": sent, "email_error": err})
+    qr_filename = f"{prefix}_receiving_qr.pdf"
+    qr_path = os.path.join(job_dir, qr_filename)
+    try:
+        base_url = os.environ.get("PUBLIC_BASE_URL") or request.host_url
+        pdf_bytes = qr_ticket.build_qr_pdf(entry["id"], job_number, entry["po_number"], base_url, locations, pallet_count)
+        with open(qr_path, "wb") as f:
+            f.write(pdf_bytes)
+        entry = inventory.set_qr_pdf_filename(entry["id"], qr_filename)
+    except Exception as e:
+        log.error(f"QR PDF build failed for entry {entry['id']}: {e}")
+        qr_path = None
+
+    loc_text = ", ".join(f"{l['location']} ({l['count']})" for l in locations)
+    body = (
+        f"New shipment received for Job #{job_number}.\n"
+        f"PO #: {entry['po_number'] or '(none)'}\n"
+        f"Pallets: {pallet_count}\n"
+        f"Location(s): {loc_text}\n"
+        f"Received by: {entry['confirmed_by']}\n"
+    )
+    if entry.get("comment"):
+        body += f"Comment: {entry['comment']}\n"
+    attachments = [os.path.join(job_dir, n) for n in slip_files] + ([qr_path] if qr_path else [])
+    sent, err = emailer.send_flag_email(
+        to_addr=sess["pm_email"],
+        subject=f"[AES Logistics] Shipment received — Job #{job_number}",
+        body_text=body,
+        attachment_paths=attachments,
+    )
+
+    # Mirror to the AES File Service (non-fatal): slip pages -> packing_slip,
+    # pallet photos -> intake_photo, in the job's project folder.
+    aes_items = []
+    for i, name in enumerate(slip_files, start=1):
+        with open(os.path.join(job_dir, name), "rb") as f:
+            aes_items.append((AES_FILE_TYPE_PACKING_SLIP, aes_filename("PackingSlip", job_number, f"page-{i}", name), f.read()))
+    for i, name in enumerate(pallet_files, start=1):
+        with open(os.path.join(job_dir, name), "rb") as f:
+            aes_items.append((AES_FILE_TYPE_INTAKE_PHOTO, aes_filename("Intake", job_number, f"pallet-{i}", name), f.read()))
+    aes_result = upload_files_to_aes(job_number, aes_items)
+
+    shutil.rmtree(sdir, ignore_errors=True)
+    log.info(f"Incoming shipment finalized: entry {entry['id']} Job #{job_number}, {pallet_count} pallet(s). PM email sent: {sent}")
+    return jsonify({
+        "status": "ok",
+        "entry": entry,
+        "qr_pdf_url": f"/api/inventory/{entry['id']}/qr.pdf" if entry.get("qr_pdf_filename") else None,
+        "email_sent": sent,
+        "email_error": err,
+        "file_service": {"success": aes_result["success"], "uploaded": len(aes_result["uploaded"]), "failed": aes_result["failed"]},
+    })
+
+
+@app.route("/api/inventory/<entry_id>/qr.pdf")
+@login_required
+def api_inventory_qr_pdf(entry_id):
+    entry = inventory.get_entry(entry_id)
+    if not entry or not entry.get("qr_pdf_filename"):
+        return jsonify({"error": "no QR label for this entry"}), 404
+    path = os.path.join(_slip_job_dir(entry["job_number"]), entry["qr_pdf_filename"])
+    if not os.path.isfile(path):
+        return jsonify({"error": "QR label file missing"}), 404
+    return send_file(path, mimetype="application/pdf", as_attachment=False)
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False)

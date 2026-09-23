@@ -21,9 +21,9 @@ change — **not a Phase 9.** Policy: `aesl:PolicyNoOntologyPhase9`.
   values attached to a delivery, not linked entities. They become classes only if
   they gain their own store.
 - **Pallet-split sum invariant** (`sum(LocationSlit.count) == palletCount`) is
-  enforced **client-side** at HEAD (data-model.md notes the server currently
-  trusts the caller). The ontology states the invariant; the code gate is a
-  follow-up, not silently re-added.
+  now enforced **server-side** in `POST /api/incoming/finalize` (A3), plus
+  client-side in the wizard. The ontology states the invariant; the code gate
+  lives in `app.py`.
 - **Access control / role gating** is owned by the auth layer + `deliveries_assigned_to`
   (scheduling.py:201); the ontology reflects visibility policy, it does not decide it
   at runtime. Spec 004 is the authority for auth decisions.
@@ -38,7 +38,7 @@ Each requires Markus approval and a new numbered Spec before implementation.
 | Ad-hoc delivery / upload entity | When `/api/upload` has a real handler + store | `aesl:PolicyAdHocDeferred` |
 | OCR extraction entity | Dedicated Spec or promotion in data-model.md | `aesl:PolicyOcrDeferred` |
 | SMS/ETA entities | When they gain a store / persisted state | `aesl:PolicySmsEtaDeferred` |
-| Palette-split server-side gate | Follow-up code Spec (not ontology) | `aesl:PolicyPalletSplitCodeGate` |
+| ~~Pallet-split server-side gate~~ — landed with A3 (`api_incoming_finalize`) | Done | `aesl:PolicyPalletSplitCodeGate` |
 | Ontology Phase 9 | Does not exist | `aesl:PolicyNoOntologyPhase9` |
 
 ## Hermes / agents
@@ -50,4 +50,4 @@ single contract. Do not invent a second ontology for the frontends or MCP tools.
 or geotag, or mark inventory removed on its own. That is human-owned work
 (`aesl:PolicyNoAutoCompletesDelivery`). The OWL/SHACL layer gates the contract;
 the Flask app + frontends + sync scripts remain authoritative at runtime
-(`aesl:PolicyOntologyDoesNotReplacePipelines`).
+(`aesl:PolicyOntologyDoesNotReplacePipelines`).

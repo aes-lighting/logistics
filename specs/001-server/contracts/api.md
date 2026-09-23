@@ -40,17 +40,18 @@
 | POST `/api/schedule/<id>/ticket` | ✅ | multipart `ticket` OR `generate_ticket=true`+`line_items` JSON |
 | POST `/api/schedule/<id>/generate_ticket` | ✅ | `{line_items}` → renders + saves generated ticket |
 | POST `/api/schedule/<id>/revise_ticket` | ✅ | `{line_items}` or header fields |
-| GET `/api/schedule/<id>/file/<n>` | ⚠️ | server: `<n>` = `"ticket"` or **int index** → photos then signature. Frontend sends `file/<ticket_filename>` → **mismatch (F4)** |
+| GET `/api/schedule/<id>/file/<n>` | ✅ | `<n>` = `"ticket"`, int index (photos then signature), **or a stored filename** (`ticket_filename`, photo, `signature_filename`, `packed_signature_filename`) — what both frontends send. Only filenames recorded on the delivery are served. Unauthenticated (used as `<img src>`; F3/spec 004). |
 | POST `/api/schedule/<id>/pack` | ✅ | `packed_by`, `signature`, `line_item_checks` JSON or `checkoff_confirmed=true`; requires all items when line_items present |
 | POST `/api/schedule/<id>/start` | ✅ | `{latitude,longitude}`; SMS + ETA; returns `{sms_sent,sms_error,eta}` |
-| POST `/api/schedule/<id>/complete` | ✅ | `signed_by`, `signature`, `photos`(≥2), `geotag`, `unload_item_checks`/`checkoff_confirmed`; emails PM+receiver; mirrors AES |
-| POST `/api/schedule/<id>/send_copy_to_pm` | ✅ | `{pm_email}`; emails ticket copy. **Frontend calls `/send_to_pm` → mismatch (F4)** |
+| POST `/api/schedule/<id>/complete` | ✅ | `signed_by`, `signature`, `photos`(≥2), `geotag`, `unload_item_checks`/`checkoff_confirmed`; emails PM+receiver; mirrors to AES File Service (`delivery_photo`); response adds `file_service:{success,uploaded,failed}` |
+| POST `/api/schedule/<id>/send_copy_to_pm` | ✅ | PM portal; `@pm_or_admin_required`; `{pm_email}` → `{status, sent}` (`sent` added — PM portal checks it). |
+| POST `/api/schedule/<id>/send_to_pm` | ✅ | driver app Warehouse; `@login_required`; same handler/response as above. |
 | DELETE `/api/schedule/<id>` | ✅ | deletes record + files |
 | GET `/api/schedule/pms` | ✅ | client calls this (`/api/schedule/pms`) — filtered to pm/admin |
 | GET `/api/schedule/drivers` | ✅ | `{drivers:[{name}]}` |
 | GET `/api/schedule/driver/today` | ✅ | `{deliveries}` ready today |
 | GET `/api/schedule/driver/mine` | ✅ | **`?driver_name=`** required; driver's packed/en_route list |
-| GET `/api/schedule/warehouse/ready_to_pack` | ❌ **no handler** | frontend calls; `scheduling.deliveries_ready_to_pack()` exists but unexposed (WS-1) |
+| GET `/api/schedule/warehouse/ready_to_pack` | ✅ | `@login_required`; `{deliveries}` = `scheduling.deliveries_ready_to_pack()` (status `ticket_uploaded`, by date) |
 
 ## Inventory (pm)
 
@@ -60,30 +61,33 @@
 | GET `/api/inventory` | ✅ | `{entries:[…]}` (active only) |
 | POST `/api/inventory/<id>/remove` | ✅ | Mark Shipped |
 | GET `/api/inventory/export` | ✅ | XLSX (pm/admin) |
-| GET `/api/inventory/pms` | ❌ **no handler** | frontend + warehouse "Send to PM" call it (WS-1) |
+| GET `/api/inventory/pms` | ✅ | see wizard table below |
 
-## Incoming inventory (server single-shot)
+## Incoming inventory — wizard (sanctioned contract; A3, landed 2026-09-23)
 
-| Method & path | Impl | Notes |
-|---|---|---|
-| POST `/api/incoming/scan` | ✅ | multipart `slip`; returns `{slip_id, job_number, po_number}` |
-
-wait: config key is `incoming_staging_dir`; slip_id = basename of staged `uuid.jpg`.
-
-| POST `/api/incoming/confirm` | ✅ | `{slip_id, job_number, po_number}`; moves to Incoming_Packing_Slips, logs entry |
-| POST `/api/incoming/flag` | ✅ | `{slip_id, reason}`; moves to flagged; emails PMteam |
-
-## Incoming inventory (**frontend wizard** — server mismatch F4)
+Session state is on disk at `<incoming_staging_dir>/<session_id>/session.json`
+(+ `page_N.jpg`, `pallet_N.jpg`) so it works across gunicorn workers. All routes `@login_required`.
 
 | Method & path | Impl | Notes |
 |---|---|---|
-| POST `/api/incoming/scan_page` | ❌ | wizard expected `{session_id, photo?/slip?}` → `{session_id, job_number_guess, po_number_guess}` (frontend sends `photo`) |
-| POST `/api/incoming/confirm_job` | ❌ | `{session_id, job_number, po_number, staff, pm_email?}`; `needs_pm` error |
-| POST `/api/incoming/pallet_photo` | ❌ | `{session_id, photo}` |
-| POST `/api/incoming/finalize` | ❌ | `{session_id, pallet_count, locations, comment}` → `{qr_pdf_url}` |
-| POST `/api/incoming/flag` | ⚠️ | frontend sends `{session_id, reason, note, staff}`; server expects `{slip_id, reason}` |
+| POST `/api/incoming/scan_page` | ✅ | multipart `photo` (or `slip`), `session_id?` → `{session_id, page_count, job_number_guess, po_number_guess}`. No `session_id` opens a session; first page with a match sets each guess. |
+| POST `/api/incoming/confirm_job` | ✅ | `{session_id, job_number, po_number?, staff?, pm_email?}` → `{session_id, pm_email}`. `pm_email` given → memoized in `job_pm_directory`; else looked up; neither → **400 `{"error":"needs_pm"}`**. |
+| POST `/api/incoming/pallet_photo` | ✅ | multipart `session_id`, `photo` → `{pallet_photo_count}`. Requires confirmed session (409 otherwise). |
+| POST `/api/incoming/finalize` | ✅ | `{session_id, pallet_count, locations:[{location,count}], comment?}` → `{entry, qr_pdf_url, email_sent, email_error, file_service}`. **Server gates:** photos ≥ pallet_count; every location ∈ `inventory.LOCATIONS`; counts ≥1 and **sum == pallet_count** (400 otherwise). Files pages + pallet photos to `<dest_dir>/Incoming_Packing_Slips/Job_<n>/`, writes ledger entry, QR PDF, emails PM (slip pages + QR attached), mirrors pages (`packing_slip`) + pallet photos (`intake_photo`) to the AES File Service, deletes session. |
+| POST `/api/incoming/flag` | ✅ | wizard `{session_id, reason, note?, staff?}` (flags all pages) **or** legacy `{slip_id, reason}` → `{email_sent, email_error}`. |
+| GET `/api/inventory/<id>/qr.pdf` | ✅ | printable QR receiving label (`qr_pdf_url` from finalize). |
+| GET `/api/inventory/pms` | ✅ | `{pms:[{name,email}]}` — auth-service pm/admin users; falls back to emails in `job_pm_directory` if auth-service refuses/unreachable. |
 
-## Decision (owner: 005-inventory)
-Align on the **wizard contract** (extend server) as the sanctioned API, since the
-shipped frontend already implements it. Update the four ❌ rows to ✅ in `app.py`
-in the same commit as `contracts/api.md`.
+## Incoming inventory — legacy single-shot (kept, not called by frontends)
+
+| Method & path | Impl | Notes |
+|---|---|---|
+| POST `/api/incoming/scan` | ✅ | multipart `slip` → `{slip_id, job_number, po_number}` |
+| POST `/api/incoming/confirm` | ✅ | `{slip_id, job_number, po_number}`; files slip + `inventory.add_entry` (previously called non-existent `inventory.log_packing_slip` → 500; fixed). |
+
+## Decision (owner: 005-inventory) — DONE
+Aligned on the **wizard contract** (extended server). Driver app now attaches
+`Authorization: Bearer <email|name>` on same-origin `/api/` calls (global fetch
+wrapper), matching the PM portal — without it every `@login_required` route
+returned 401 to the driver app. This is the same unverified-identity scheme
+as the PM portal; F3 (spec 004) still applies.

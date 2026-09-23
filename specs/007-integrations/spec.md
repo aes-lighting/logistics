@@ -12,16 +12,39 @@ unconfigured service.
 - **Status**: replaces the deleted embedded `auth.py` (F5). **Decorators still
   don't verify role/token** (F3) — see `004-auth`.
 
-## AES File Service (photo mirror)
-- **Files**: `app.py` (`upload_to_aes`, `upload_delivery_photos_to_aes`,
-  `generate_aes_filename`).
-- **Env**: `AES_API_URL` (default raw IP `http://71.172.107.128:3001`) +
-  `AES_API_KEY` (**hardcoded real key at `app.py:93` — F2**).
-- **Call**: `POST {AES_API_URL}/api/files/upload` multipart `file`
-  (`<DIRECTORY>_<SHIPMENT>_<ts>_<hash>.<ext>`), form `logisticsId` +
-  `directoryPath`, header `X-API-Key`. Response `{success, data:{fileId,fileName,...}}`.
-- **When**: on scheduled-delivery **complete** (signature + photos). Non-fatal on failure.
-- **Ad-hoc sync** (`/api/upload`) does not mirror at HEAD (see 001-open) — **verify intended**.
+## AES File Service (project-folder mirror)
+- **Service**: Node/Express `aes-file-service-v0` on the AES Windows server
+  (source: `F:\AESFileService`, `src/server.js`; run via NSSM). Resolves a
+  5-digit job number to its project folder from a periodic scan of
+  `storage.rootDirectory` (projects live one level down: `<root>\<group>\NNNNN - Name`).
+- **Files (logistics side)**: `app.py` — `upload_to_aes`, `upload_files_to_aes`,
+  `upload_delivery_photos_to_aes`, `aes_filename`.
+- **Env**: `AES_API_URL` (e.g. `http://<host>:3001`) + `AES_API_KEY` — env only,
+  app refuses to start without them. `AES_API_KEY` must equal the service's
+  **`API_KEY` env var** (`server.js` checks `process.env.API_KEY`; the
+  `authentication.apiKey` in its `config.json` is *not* what `/api/upload` checks).
+- **Call** (corrected 2026-09-23 — the previous `POST /api/files/upload` with
+  `logisticsId`/`directoryPath` does not exist on the service and 404'd):
+  `POST {AES_API_URL}/api/upload`, header `X-API-Key`, multipart:
+  `file`, `projectNumber` (job number), `fileType`, `filename`
+  (`<Prefix>_Job<n>_<YYYYMMDD-HHMMSS>_<8hex>_<label>.<ext>`; unique because the
+  service overwrites same-name files).
+  → `200 {success:true, fileName, destinationPath, projectName, ...}` ·
+  `400 {success:false, error}` (e.g. `Project not found: <n>`, `Unsupported file type`) ·
+  `401` bad key.
+- **fileType → destination** (service `config/file-types.json`):
+
+  | fileType | Destination under project folder | Sent when |
+  |---|---|---|
+  | `packing_slip` | `PROJECT MANAGEMENT\Accounting Docs\Purchase Orders and Packing Slips\Packing Slips` | Incoming wizard **finalize** (each slip page) |
+  | `intake_photo` | `CORRESPONDENCE\Intake Photos` | Incoming wizard **finalize** (each pallet photo) |
+  | `delivery_photo` | `CORRESPONDENCE\Delivery Photos` | Scheduled delivery **complete** (signature + photos) |
+
+  `intake_photo` + `delivery_photo` were added to the service's `file-types.json`
+  on 2026-09-23 (requires a service restart to load).
+- **Failure**: non-fatal. Result is returned to the caller as
+  `file_service: {success, uploaded, failed:[{file,error}]}` on `/complete` and `/finalize`.
+- **Ad-hoc sync** (`/api/upload` on *this* app) still has no handler (001 WS-3).
 
 ## SMTP (emailer.py)
 - Env `SMTP_HOST/PORT/USERNAME/PASSWORD/FROM/USE_TLS`; `send_flag_email(to,subject,body,attachment_paths)`.
@@ -46,7 +69,8 @@ Relevant request/response for each in `001-server/contracts/api.md`.
 Any change here updates this spec in the same commit.
 
 ## Tasks
-- [ ] Purge hardcoded `AES_API_KEY` (F2) — read from env only; file `.env.example` key name.
+- [x] Purge hardcoded `AES_API_KEY` (F2) — read from env only (A1).
+- [x] Rewire File Service calls to the real `/api/upload` contract; mirror incoming slips + pallet photos.
 - [ ] Decide whether ad-hoc `/api/upload` mirrors to AES (001-WS-3).
 - [ ] Verify auth-service admin endpoints + error surface (timeout/503) are handled by callers.
-- [ ] Add a config-absence table test: each integration returns its sentinel when env unset.
+- [ ] Add a config-absence table test: each integration returns its sentinel when env unset.

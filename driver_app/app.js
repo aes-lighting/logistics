@@ -16,6 +16,21 @@ let currentAppMode = null; // "warehouse" or "drivers" - which half of the drive
 const LOGIN_URL = "/api/auth/login";
 const LOGOUT_URL = "/api/auth/logout";
 
+// Attach the logged-in identity to every same-origin /api/ call, matching the
+// PM portal's api() helper (spec 002 task / spec 004). Without this, every
+// @login_required route returns 401 to the driver app.
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  const url = typeof input === "string" ? input : input.url;
+  const ident = currentUser && (currentUser.email || currentUser.name);
+  if (ident && url.startsWith("/api/") && url !== LOGIN_URL) {
+    const headers = new Headers(init.headers || {});
+    if (!headers.has("Authorization")) headers.set("Authorization", `Bearer ${ident}`);
+    init = { ...init, headers };
+  }
+  return _nativeFetch(input, init);
+};
+
 // ---------- IndexedDB helpers ----------
 
 function openDB() {
@@ -1040,8 +1055,9 @@ function initIncomingLocationsScreen() {
       const result = await resp.json();
       if (!resp.ok) throw new Error(result.error || `Failed with status ${resp.status}`);
 
-      document.getElementById("incoming-done-sub").textContent =
-        `Logged and the PM has been emailed. ${incomingPalletCount} pallet(s) recorded.`;
+      document.getElementById("incoming-done-sub").textContent = result.email_sent
+        ? `Logged and the PM has been emailed. ${incomingPalletCount} pallet(s) recorded.`
+        : `Logged (${incomingPalletCount} pallet(s)), but the PM email could not be sent — let the PM know directly.`;
       const printBtn = document.getElementById("btn-print-qr");
       printBtn.classList.remove("hidden");
       printBtn.onclick = () => window.open(result.qr_pdf_url, "_blank");
@@ -1556,4 +1572,4 @@ async function boot() {
   }
 }
 
-boot();
+boot();

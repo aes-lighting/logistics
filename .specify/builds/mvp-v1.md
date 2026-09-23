@@ -35,8 +35,8 @@ verified unless marked `DONE (verified)`.
 | Item | State at HEAD | Evidence |
 |---|---|---|
 | Server single-shot scan/confirm/flag | `DONE (code)` | `api_incoming_scan` / `_confirm` / `_flag` |
-| **Frontend wizard** (multi-page, pallets, split locations, QR) | **BROKEN — contract mismatch** | frontend calls `scan_page|confirm_job|pallet_photo|finalize`; server has none of these → F4 |
-| Job→PM directory + auto-email | `DONE (server)` | `inventory.py:get/set_pm_for_job` (but wizard can't reach via current routes) |
+| Frontend wizard (multi-page, pallets, split locations, QR) | `DONE (code + test-client E2E)` — needs real-device run | A3: `api_incoming_scan_page|confirm_job|pallet_photo|finalize`; `contracts/api.md` |
+| Job→PM directory + auto-email | `DONE (code)` | `confirm_job` + `finalize` email |
 | QR-coded PDF label | `DONE (server)` | `qr_ticket.py` |
 | Excel export (Current + Summary by Location) | `DONE` | `inventory_report.py` |
 | End-of-day report | **BROKEN** | `send_daily_inventory_report.py` imports deleted `auth` → F5 |
@@ -62,8 +62,7 @@ verified unless marked `DONE (verified)`.
 
 ## Known-broken / must-decide
 
-1. **Incoming Inventory frontend↔server contract** (F4) — pick a side: extend
-   the server with the wizard endpoints, or rework the frontend to the
-   single-shot API. Decide in `specs/005-inventory/`.
+1. ~~Incoming Inventory frontend↔server contract (F4)~~ — **resolved by A3**
+   (server extended to the wizard contract; see `contracts/api.md`).
 2. **High-availability note**: single JSON-writer model; no locking/atomicity.
-3. Secrets purge per `ops/security.md` before any public exposure.
+3. Secrets purge per `ops/security.md` before any public exposure.
