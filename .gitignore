@@ -4,5 +4,21 @@ __pycache__/
 *.pyd
 .Python
 *\schedule_store.json
-server/__pycache__/**.env 
+server/__pycache__/
+
+# == Secrets — never track ==
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# == Virtualenvs / build ==
+.venv/
+venv/
 .specify/scripts/.venv/
+*.egg-info/
+dist/
+build/
+
+# == Node ==
+node_modules/

@@ -89,8 +89,17 @@ if os.path.isdir(STATIC_DIR):
     print(f"Files in STATIC_DIR: {os.listdir(STATIC_DIR)}")
 
 # ===== AES File Service Configuration =====
-AES_API_URL = os.environ.get("AES_API_URL", "http://71.172.107.128:3001")
-AES_API_KEY = os.environ.get("AES_API_KEY", "yvgDtDvqWY2L8A5gb8k4btePZRW20b9m3ur0vgpinZDoF1pcqgjwmhofS8Z0Yxfb")
+# Secrets must come from the environment ONLY — never a hardcoded fallback.
+# Fail fast at startup if the File Service key is missing so a misconfigured
+# deploy can't silently run without auth to the file service.
+AES_API_URL = os.environ.get("AES_API_URL")
+AES_API_KEY = os.environ.get("AES_API_KEY")
+
+if not AES_API_URL or not AES_API_KEY:
+    sys.exit(
+        "FATAL: AES_API_URL and AES_API_KEY must be set in the environment (see .env). "
+        "Refusing to start with an empty fallback."
+    )
 
 app = Flask(__name__, static_folder=None)
 
