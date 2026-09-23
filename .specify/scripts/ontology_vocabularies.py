@@ -55,6 +55,26 @@ VOCABULARIES: dict[str, list[dict]] = {
             "note": "server/inventory.py LOCATIONS — 13 fixed; a location must come from here.",
         },
     ],
+    "SupplyItem": [
+        {
+            "id": "supplyStatus",
+            "property": "supplyStatus",
+            "values": ["in_stock", "below_threshold", "reorder"],
+            "required": False,
+            "provenance": "intentional_closed_set@specs/009-supply-jit/spec.md",
+            "note": "Derived: on_hand > min_threshold = in_stock; on_hand < min_threshold = below_threshold; flagged = reorder. Closed set for MVP.",
+        },
+    ],
+    "Geofence": [
+        {
+            "id": "geofenceTrigger",
+            "property": "geofenceTrigger",
+            "values": ["en_route_entry", "arrival"],
+            "required": False,
+            "provenance": "intentional_closed_set@specs/010-geofencing/spec.md",
+            "note": "Spatial events emitted by the driver device; en_route_entry fires on first crossing into radius, arrival when inside after en_route.",
+        },
+    ],
 }
 
 

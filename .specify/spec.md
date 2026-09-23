@@ -45,6 +45,8 @@ real system, not the superseded README.
 | `specs/006-scheduled-delivery/` | Ticket lifecycle: scheduled→packed→en_route→completed |
 | `specs/007-integrations/` | SMTP, Twilio SMS, Google Maps, AES File Service, ICS |
 | `specs/008-infra-ops/` | Docker, Railway, cloudflared, launcher, filesystem layout |
+| `specs/009-supply-jit/` | MVP: supply/materials ledger, min-threshold, JIT deliveries |
+| `specs/010-geofencing/` | MVP: per-delivery geofence, entry/arrival triggers |
 | `design/001-flows.md` | Screen map + end-to-end user flows |
 | `ops/runbook.md` | Build, run, test, deploy |
 | `ops/security.md` | Security findings & remediation (secrets, auth) |

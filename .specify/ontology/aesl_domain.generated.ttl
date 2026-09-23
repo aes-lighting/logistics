@@ -375,3 +375,95 @@ aesl:longitude
     rdfs:domain aesl:Geotag ;
     rdfs:range xsd:decimal ;
     rdfs:comment "Generated structural property for Geotag.longitude." .
+
+aesl:SupplyItem
+    a owl:Class ;
+    rdfs:label "SupplyItem" ;
+    rdfs:comment "Generated class stub for SupplyItem; curated axioms refine hierarchy." .
+
+aesl:name
+    a owl:DatatypeProperty ;
+    rdfs:label "SupplyItem.name" ;
+    rdfs:domain aesl:SupplyItem ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Generated structural property for SupplyItem.name." .
+
+aesl:onHandQuantity
+    a owl:DatatypeProperty ;
+    rdfs:label "SupplyItem.onHandQuantity" ;
+    rdfs:domain aesl:SupplyItem ;
+    rdfs:range xsd:integer ;
+    rdfs:comment "Generated structural property for SupplyItem.onHandQuantity." .
+
+aesl:minThreshold
+    a owl:DatatypeProperty ;
+    rdfs:label "SupplyItem.minThreshold" ;
+    rdfs:domain aesl:SupplyItem ;
+    rdfs:range xsd:integer ;
+    rdfs:comment "Generated structural property for SupplyItem.minThreshold." .
+
+aesl:supplyStatus
+    a owl:DatatypeProperty ;
+    rdfs:label "SupplyItem.supplyStatus" ;
+    rdfs:domain aesl:SupplyItem ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Generated structural property for SupplyItem.supplyStatus." .
+
+aesl:JitNeed
+    a owl:Class ;
+    rdfs:label "JitNeed" ;
+    rdfs:comment "Generated class stub for JitNeed; curated axioms refine hierarchy." .
+
+aesl:jobNumber
+    a owl:DatatypeProperty ;
+    rdfs:label "JitNeed.jobNumber" ;
+    rdfs:domain aesl:JitNeed ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Generated structural property for JitNeed.jobNumber." .
+
+aesl:neededByDate
+    a owl:DatatypeProperty ;
+    rdfs:label "JitNeed.neededByDate" ;
+    rdfs:domain aesl:JitNeed ;
+    rdfs:range xsd:date ;
+    rdfs:comment "Generated structural property for JitNeed.neededByDate." .
+
+aesl:neededQuantity
+    a owl:DatatypeProperty ;
+    rdfs:label "JitNeed.neededQuantity" ;
+    rdfs:domain aesl:JitNeed ;
+    rdfs:range xsd:integer ;
+    rdfs:comment "Generated structural property for JitNeed.neededQuantity." .
+
+aesl:Geofence
+    a owl:Class ;
+    rdfs:label "Geofence" ;
+    rdfs:comment "Generated class stub for Geofence; curated axioms refine hierarchy." .
+
+aesl:centerLatitude
+    a owl:DatatypeProperty ;
+    rdfs:label "Geofence.centerLatitude" ;
+    rdfs:domain aesl:Geofence ;
+    rdfs:range xsd:decimal ;
+    rdfs:comment "Generated structural property for Geofence.centerLatitude." .
+
+aesl:centerLongitude
+    a owl:DatatypeProperty ;
+    rdfs:label "Geofence.centerLongitude" ;
+    rdfs:domain aesl:Geofence ;
+    rdfs:range xsd:decimal ;
+    rdfs:comment "Generated structural property for Geofence.centerLongitude." .
+
+aesl:radiusMeters
+    a owl:DatatypeProperty ;
+    rdfs:label "Geofence.radiusMeters" ;
+    rdfs:domain aesl:Geofence ;
+    rdfs:range xsd:integer ;
+    rdfs:comment "Generated structural property for Geofence.radiusMeters." .
+
+aesl:geofenceTrigger
+    a owl:DatatypeProperty ;
+    rdfs:label "Geofence.geofenceTrigger" ;
+    rdfs:domain aesl:Geofence ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Generated structural property for Geofence.geofenceTrigger." .

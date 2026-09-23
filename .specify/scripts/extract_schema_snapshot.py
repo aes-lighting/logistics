@@ -93,6 +93,23 @@ CLASS_FIELDS: dict[str, list[dict]] = {
         {"name": "latitude", "range": "decimal"},
         {"name": "longitude", "range": "decimal"},
     ],
+    "SupplyItem": [
+        {"name": "name", "range": "string"},
+        {"name": "onHandQuantity", "range": "integer"},
+        {"name": "minThreshold", "range": "integer"},
+        {"name": "supplyStatus", "range": "string"},
+    ],
+    "JitNeed": [
+        {"name": "jobNumber", "range": "string"},
+        {"name": "neededByDate", "range": "date"},
+        {"name": "neededQuantity", "range": "integer"},
+    ],
+    "Geofence": [
+        {"name": "centerLatitude", "range": "decimal"},
+        {"name": "centerLongitude", "range": "decimal"},
+        {"name": "radiusMeters", "range": "integer"},
+        {"name": "geofenceTrigger", "range": "string"},
+    ],
 }
 
 

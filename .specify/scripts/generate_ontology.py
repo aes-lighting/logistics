@@ -50,6 +50,7 @@ def _xsd(range_: str) -> str:
         "integer": "xsd:integer",
         "boolean": "xsd:boolean",
         "dateTime": "xsd:dateTime",
+        "date": "xsd:date",
         "decimal": "xsd:decimal",
         "double": "xsd:double",
     }.get(range_, "xsd:string")

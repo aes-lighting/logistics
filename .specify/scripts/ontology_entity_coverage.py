@@ -11,6 +11,7 @@ from pathlib import Path
 REQUIRED_CLASSES = [
     "Delivery", "InventoryEntry", "JobDirectoryEntry",
     "CalendarEvent", "DeliveryTicket", "LineItem", "LocationSlit", "Geotag",
+    "SupplyItem", "JitNeed", "Geofence",
 ]
 
 # Explicitly deferred (accepted, no TBox class yet) — recorded so agents do not

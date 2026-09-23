@@ -179,3 +179,70 @@ aesl:GeotagShape
         sh:minInclusive -180 ;
         sh:maxInclusive 180 ;
     ] .
+
+#################################################################
+# SupplyItem / JitNeed / Geofence (MVP, specs 009-010)
+#################################################################
+
+aesl:SupplyItemShape
+    a sh:NodeShape ;
+    sh:targetClass aesl:SupplyItem ;
+    sh:property [
+        sh:path aesl:onHandQuantity ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:minInclusive 0 ;
+        sh:message "onHandQuantity required and non-negative." ;
+    ] ;
+    sh:property [
+        sh:path aesl:minThreshold ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:minInclusive 0 ;
+        sh:message "minThreshold optional, non-negative (below it -> below_threshold)." ;
+    ] .
+    # supplyStatus sh:in generated in enums file.
+
+aesl:JitNeedShape
+    a sh:NodeShape ;
+    sh:targetClass aesl:JitNeed ;
+    sh:property [
+        sh:path aesl:neededByDate ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:date ;
+        sh:message "JIT needs a date the material must arrive." ;
+    ] ;
+    sh:property [
+        sh:path aesl:suppliesDelivery ;
+        sh:class aesl:Delivery ;
+        sh:message "When linked, the JIT need resolves to an existing Delivery." ;
+    ] .
+
+aesl:GeofenceShape
+    a sh:NodeShape ;
+    sh:targetClass aesl:Geofence ;
+    sh:property [
+        sh:path aesl:radiusMeters ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:minInclusive 10 ;
+        sh:message "Geofence radius must be >= 10m." ;
+    ] ;
+    sh:property [
+        sh:path aesl:centerLatitude ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:decimal ;
+        sh:minInclusive -90 ;
+        sh:maxInclusive 90 ;
+    ] ;
+    sh:property [
+        sh:path aesl:centerLongitude ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:decimal ;
+        sh:minInclusive -180 ;
+        sh:maxInclusive 180 ;
+    ] .
+    # geofenceTrigger sh:in generated in enums file.

@@ -61,3 +61,28 @@ aesl:slit-2
     a aesl:LocationSlit ;
     aesl:location "Back Tent" ;
     aesl:count 2 .
+
+# MVP (specs 009 / 010): supply item, a JIT need linked to the delivery,
+# and a geofence attached to the delivery.
+aesl:supply-1
+    a aesl:SupplyItem ;
+    aesl:name "LED high-bay fixture" ;
+    aesl:onHandQuantity 4 ;
+    aesl:minThreshold 10 ;
+    aesl:supplyStatus "below_threshold" .
+
+aesl:jit-1
+    a aesl:JitNeed ;
+    aesl:jobNumber "1042" ;
+    aesl:neededByDate "2026-09-30"^^xsd:date ;
+    aesl:neededQuantity 12 ;
+    aesl:suppliesDelivery aesl:delivery-7f4c .
+
+aesl:fence-1
+    a aesl:Geofence ;
+    aesl:centerLatitude 41.1400 ;
+    aesl:centerLongitude -104.8200 ;
+    aesl:radiusMeters 150 ;
+    aesl:geofenceTrigger "arrival" .
+
+aesl:delivery-7f4c aesl:hasGeofence aesl:fence-1 .

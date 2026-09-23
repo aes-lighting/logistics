@@ -66,6 +66,14 @@ aesl:DeliveryTicket owl:subClassOf aesl:Artifact .
 aesl:Signature owl:subClassOf aesl:Artifact .
 aesl:PhotoArtifact owl:subClassOf aesl:Artifact .
 
+# MVP extension (spec 009 / 010): supply, JIT, geofence.
+aesl:SupplyItem owl:subClassOf aesl:Entity .
+aesl:JitNeed owl:subClassOf aesl:Entity .
+aesl:Geofence owl:subClassOf aesl:ValueObject .
+
+aesl:SupplyItem owl:disjointWith aesl:JitNeed , aesl:Geofence , aesl:Delivery .
+aesl:JitNeed owl:disjointWith aesl:Geofence .
+
 aesl:Delivery owl:disjointWith aesl:CalendarEvent , aesl:InventoryEntry , aesl:JobDirectoryEntry .
 
 #################################################################
@@ -179,6 +187,19 @@ aesl:hasLocationSlit
     rdfs:domain aesl:InventoryEntry ;
     rdfs:range aesl:LocationSlit ;
     rdfs:comment "InventoryEntry -> per-location pallet counts (split allowed)." .
+
+# MVP edges (spec 009 / 010).
+aesl:hasGeofence
+    a owl:ObjectProperty ;
+    rdfs:domain aesl:Delivery ;
+    rdfs:range aesl:Geofence ;
+    rdfs:comment "Delivery -> its geofence value object (at most one)." .
+
+aesl:suppliesDelivery
+    a owl:ObjectProperty ;
+    rdfs:domain aesl:JitNeed ;
+    rdfs:range aesl:Delivery ;
+    rdfs:comment "A JIT materials need is satisfied by a scheduled delivery (spec 009 C2/C3)." .
 
 #################################################################
 # Neurosymbolic ownership boundary (policies)

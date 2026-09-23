@@ -26,15 +26,19 @@ ENTITY_TO_CLASS = {
     "line_item": "LineItem",
     "location_slit": "LocationSlit",
     "geotag": "Geotag",
+    "supply_item": "SupplyItem",
+    "jit_need": "JitNeed",
+    "geofence": "Geofence",
 }
 
 # Nested value objects that are NOT store entities but project to classes.
-VALUE_OBJECTS = ("LineItem", "LocationSlit", "Geotag")
+VALUE_OBJECTS = ("LineItem", "LocationSlit", "Geotag", "Geofence")
 
 # Order for deterministic emission.
 CLASS_ORDER = [
     "Delivery", "InventoryEntry", "JobDirectoryEntry", "CalendarEvent",
     "DeliveryTicket", "LineItem", "LocationSlit", "Geotag",
+    "SupplyItem", "JitNeed", "Geofence",
 ]
 
 

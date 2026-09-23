@@ -72,6 +72,33 @@
       "provenance": "intentional_closed_set@server/inventory.py:23",
       "kind": "intentional_closed_set",
       "note": "server/inventory.py LOCATIONS \u2014 13 fixed; a location must come from here."
+    },
+    "supplyStatus": {
+      "id": "supplyStatus",
+      "property": "supplyStatus",
+      "targetClass": "SupplyItem",
+      "required": false,
+      "values": [
+        "in_stock",
+        "below_threshold",
+        "reorder"
+      ],
+      "provenance": "intentional_closed_set@specs/009-supply-jit/spec.md",
+      "kind": "intentional_closed_set",
+      "note": "Derived: on_hand > min_threshold = in_stock; on_hand < min_threshold = below_threshold; flagged = reorder. Closed set for MVP."
+    },
+    "geofenceTrigger": {
+      "id": "geofenceTrigger",
+      "property": "geofenceTrigger",
+      "targetClass": "Geofence",
+      "required": false,
+      "values": [
+        "en_route_entry",
+        "arrival"
+      ],
+      "provenance": "intentional_closed_set@specs/010-geofencing/spec.md",
+      "kind": "intentional_closed_set",
+      "note": "Spatial events emitted by the driver device; en_route_entry fires on first crossing into radius, arrival when inside after en_route."
     }
   }
 }

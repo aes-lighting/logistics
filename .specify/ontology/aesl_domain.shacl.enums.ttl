@@ -41,6 +41,21 @@ aesl:DeliveryEnumShape
     ].
 
 #################################################################
+# Geofence closed vocabularies
+#################################################################
+
+aesl:GeofenceEnumShape
+    a sh:NodeShape ;
+    sh:targetClass aesl:Geofence ;
+    sh:property [
+        sh:path aesl:geofenceTrigger ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:in ( "en_route_entry" "arrival" ) ;
+        sh:message "geofenceTrigger must be a closed geofenceTrigger value from live sources" ;
+    ].
+
+#################################################################
 # InventoryEntry closed vocabularies
 #################################################################
 
@@ -69,4 +84,19 @@ aesl:LocationSlitEnumShape
         sh:datatype xsd:string ;
         sh:in ( "Warehouse" "Back Tent" "Front Tent" "Trailer 6" "Trailer 4" "Redbox" "Front Red" "CS 1036" "CS 1071" "CS 1058" "CS 1015" "Office" "Truck" ) ;
         sh:message "location must be a closed storageLocation value from live sources" ;
+    ].
+
+#################################################################
+# SupplyItem closed vocabularies
+#################################################################
+
+aesl:SupplyItemEnumShape
+    a sh:NodeShape ;
+    sh:targetClass aesl:SupplyItem ;
+    sh:property [
+        sh:path aesl:supplyStatus ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:in ( "in_stock" "below_threshold" "reorder" ) ;
+        sh:message "supplyStatus must be a closed supplyStatus value from live sources" ;
     ].
