@@ -1,4 +1,5 @@
-const CACHE_NAME = "aes-logistics-shell-v1";
+// Bump CACHE_NAME whenever the shell changes in a way old installs must drop.
+const CACHE_NAME = "aes-logistics-shell-v2";
 const SHELL_FILES = [
   "/",
   "/index.html",
@@ -30,9 +31,21 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.startsWith("/api/")) {
     return;
   }
+  if (event.request.method !== "GET") {
+    return;
+  }
 
-  // App shell: cache-first so the app opens instantly even offline.
+  // App shell: network-first so every deploy reaches phones immediately;
+  // fall back to the cached copy when offline (end-of-shift sync still works).
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((resp) => {
+        if (resp && resp.ok && url.origin === self.location.origin) {
+          const copy = resp.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
+        return resp;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
