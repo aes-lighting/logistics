@@ -16,9 +16,14 @@ real system, not the superseded README.
   (`specs/007-integrations/`) in the **same commit** as the code.
 - Any change to the **shared OCR regexes** updates `server/server_config.json`
   and the note in `specs/001-server/spec.md` together.
-- Ontology/IRI/closed-vocab bumping: not applicable yet (no `.ttl` ontology in
-  this kit). If one is introduced, adopt `.specify/ontology/` + `template_version`
-  discipline and this section becomes mandatory.
+- Ontology/IRI/closed-vocab bumping: the domain ontology is `.specify/ontology/`
+  (`aesl:` namespace). Any change to the JSON data model, code constants
+  (`scheduling.py` statuses, `inventory.py` `LOCATIONS`), or the data-model.md
+  record shapes **must** regenerate the snapshots + generated TTL and pass
+  `.specify/scripts/run_validate_spec.sh` (contract + SHACL + OWL-RL gates) in
+  the same commit. Closed vocabularies are `intentional_closed_set`s owned by
+  `ontology_vocabularies.py` — never hand-edit `*.generated.ttl` or
+  `*.shacl.enums.ttl`.
 - `counsel_approved` is a **forbidden** status here (no counsel role). Never
   mint it as a document status.
 
@@ -45,6 +50,8 @@ real system, not the superseded README.
 | `ops/security.md` | Security findings & remediation (secrets, auth) |
 | `ops/cron.md` | Scheduled jobs (reminders, daily report) |
 | `templates/` | `.env.example`, `server_config.json` reference copies |
+| `.specify/ontology/` | Domain ontology: `aesl:` TTL, SHACL shapes, closed vocabularies, generator/validators |
+| `.specify/scripts/` | Ontology extract/generate/validate scripts + `run_validate_spec.sh` |
 
 ## Conventions
 

@@ -1,0 +1,18 @@
+# Thin catalog ontology: imports generated + curated axioms.
+# The axioms file carries the curated ordering/hierarchy; the generated
+# file carries the structural TBox + closed-vocabulary individuals.
+@prefix aesl: <http://aes-lighting.internal/logistics#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix dct:  <http://purl.org/dc/terms/> .
+
+<http://aes-lighting.internal/logistics>
+    a owl:Ontology ;
+    dct:title "AES Logistics Domain Ontology" ;
+    dct:description "Delivery + receiving ledger + scheduling for the AES fleet. JSON-driven domain." ;
+    owl:versionInfo "0.1.0" ;
+    owl:imports <http://aes-lighting.internal/logistics/generated> ,
+                <http://aes-lighting.internal/logistics/axioms> ;
+    rdfs:comment "Catalog. Validate with .specify/scripts/validate_spec.py" .

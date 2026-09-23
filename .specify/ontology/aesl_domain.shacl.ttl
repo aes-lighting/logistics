@@ -1,0 +1,181 @@
+# Curated SHACL shapes for the AES Logistics Spec Kit.
+# Complements OWL axioms. Enforced by validate_instances.py via pyshacl
+# (called from validate_spec.py). Blocking severity.
+# Closed sh:in enum lists live in aesl_domain.shacl.enums.ttl (generated —
+# Do not hand-duplicate them here).
+#
+# Property IRI map (record keys -> curated props):
+#   deliveries.<uuid>.status          -> aesl:status     (generated sh:in)
+#   deliveries.<uuid>.ticket_source   -> aesl:ticketSource (generated sh:in)
+#   deliveries.<uuid>.assigned_driver -> aesl:assignedDriver
+#   deliveries.<uuid>.calendar_event_uid -> aesl:calendarEventUid
+#   deliveries.<uuid>.line_items[]    -> aesl:hasLineItem   (aesl:LineItem)
+#   deliveries.<uuid>.geotag          -> aesl:hasGeotag     (aesl:Geotag)
+#   entries.<uuid>.locations[]        -> aesl:hasLocationSlit (aesl:LocationSlit)
+#   entries.<uuid>.removed / .removed_reason -> aesl:removed / aesl:removedReason
+# Existence / type via sh:class here.
+@prefix aesl: <http://aes-lighting.internal/logistics#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix dct:  <http://purl.org/dc/terms/> .
+
+<http://aes-lighting.internal/logistics/shacl>
+    a owl:Ontology ;
+    dct:title "AES Logistics SHACL Shapes" ;
+    owl:versionInfo "0.1.0" ;
+    rdfs:comment "Instance shapes for deliveries, tickets, inventory entries, locations. Enums: aesl_domain.shacl.enums.ttl." .
+
+#################################################################
+# Delivery
+#################################################################
+
+aesl:DeliveryShape
+    a sh:NodeShape ;
+    sh:targetClass aesl:Delivery ;
+    sh:property [
+        sh:path aesl:entityId ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:pattern "^[0-9a-fA-F-]{36}$" ;
+        sh:message "entityId must be the 36-char uuid store key." ;
+    ] ;
+    sh:property [
+        sh:path aesl:jobNumber ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "jobNumber required." ;
+    ] ;
+    sh:property [
+        sh:path aesl:assignedDriver ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "A delivery has at most one assigned driver." ;
+    ] ;
+    sh:property [
+        sh:path aesl:calendarEventUid ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "At most one calendar event uid per delivery." ;
+    ] ;
+    sh:property [
+        sh:path aesl:hasTicket ;
+        sh:maxCount 1 ;
+        sh:class aesl:DeliveryTicket ;
+        sh:message "A delivery has at most one ticket artifact." ;
+    ] ;
+    sh:property [
+        sh:path aesl:hasLineItem ;
+        sh:class aesl:LineItem ;
+        sh:message "Each line_item must project to an aesl:LineItem." ;
+    ] ;
+    sh:property [
+        sh:path aesl:hasGeotag ;
+        sh:maxCount 1 ;
+        sh:class aesl:Geotag ;
+        sh:message "Geotag is a single value object {lat,lng|None}." ;
+    ] .
+    # status / ticketSource sh:in enforced in aesl_domain.shacl.enums.ttl.
+
+#################################################################
+# DeliveryTicket
+#################################################################
+
+aesl:DeliveryTicketShape
+    a sh:NodeShape ;
+    sh:targetClass aesl:DeliveryTicket ;
+    sh:property [
+        sh:path aesl:filename ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "Ticket file name (ticket.jpg|ticket_generated.png|…)." ;
+    ] .
+    # ticketSource sh:in in enums file.
+
+#################################################################
+# InventoryEntry
+#################################################################
+
+aesl:InventoryEntryShape
+    a sh:NodeShape ;
+    sh:targetClass aesl:InventoryEntry ;
+    sh:property [
+        sh:path aesl:entityId ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+    ] ;
+    sh:property [
+        sh:path aesl:jobNumber ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+    ] ;
+    sh:property [
+        sh:path aesl:palletCount ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:minInclusive 1 ;
+        sh:message "palletCount must be a positive integer." ;
+    ] ;
+    sh:property [
+        sh:path aesl:removed ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:boolean ;
+    ] ;
+    sh:property [
+        sh:path aesl:hasLocationSlit ;
+        sh:class aesl:LocationSlit ;
+        sh:message "Each locations[] entry must project to a LocationSlit." ;
+    ] .
+    # removedReason sh:in in enums file; appears with removed=true.
+
+#################################################################
+# LocationSlit (split-location invariant)
+#################################################################
+
+aesl:LocationSlitShape
+    a sh:NodeShape ;
+    sh:targetClass aesl:LocationSlit ;
+    sh:property [
+        sh:path aesl:location ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:message "location must be a closed LOCATIONS value (enums file)." ;
+    ] ;
+    sh:property [
+        sh:path aesl:count ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:minInclusive 1 ;
+        sh:message "LocationSlit.count must be a positive integer." ;
+    ] .
+
+#################################################################
+# Geotag
+#################################################################
+
+aesl:GeotagShape
+    a sh:NodeShape ;
+    sh:targetClass aesl:Geotag ;
+    sh:property [
+        sh:path aesl:latitude ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:decimal ;
+        sh:minInclusive -90 ;
+        sh:maxInclusive 90 ;
+    ] ;
+    sh:property [
+        sh:path aesl:longitude ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:decimal ;
+        sh:minInclusive -180 ;
+        sh:maxInclusive 180 ;
+    ] .

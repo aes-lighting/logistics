@@ -1,0 +1,63 @@
+# Positive SHACL fixture for AES Logistics (Phase 2 baseline).
+# Every instance here must satisfy aesl_domain.shacl.ttl + aesl_domain.shacl.enums.ttl.
+# Mirrors a real schedule_store.json delivery (packed) and an inventory entry.
+@prefix aesl: <http://aes-lighting.internal/logistics#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+
+aesl:delivery-7f4c
+    a aesl:Delivery ;
+    aesl:entityId "7f4c9d2e-1a2b-4c3d-8e5f-6a7b8c9d0e11" ;
+    aesl:jobNumber "1042" ;
+    aesl:deliveryDate "2026-09-24" ;
+    aesl:receiverName "Jane Miller" ;
+    aesl:receiverEmail "jane.miller@example.com" ;
+    aesl:pmEmail "pm@example.com" ;
+    aesl:siteAddress "1603 Capitol Ave, Cheyenne WY" ;
+    aesl:assignedDriver "markus" ;
+    aesl:status "packed" ;
+    aesl:ticketSource "generated" ;
+    aesl:hasTicket aesl:ticket-7f4c ;
+    aesl:hasLineItem aesl:item-7f4c-1 , aesl:item-7f4c-2 .
+
+aesl:ticket-7f4c
+    a aesl:DeliveryTicket ;
+    aesl:filename "ticket_generated.png" ;
+    aesl:ticketSource "generated" .
+
+aesl:item-7f4c-1
+    a aesl:LineItem ;
+    aesl:description "LED high-bay fixture" ;
+    aesl:quantity 12 ;
+    aesl:boxes 3 .
+
+aesl:item-7f4c-2
+    a aesl:LineItem ;
+    aesl:description "Mounting bracket" ;
+    aesl:quantity 24 ;
+    aesl:boxes 2 .
+
+aesl:entry-c3d2
+    a aesl:InventoryEntry ;
+    aesl:entityId "c3d2f4a6-7b8c-4d5e-9f0a-1b2c3d4e5f60" ;
+    aesl:jobNumber "1042" ;
+    aesl:poNumber "PO-8812" ;
+    aesl:pmEmail "pm@example.com" ;
+    aesl:confirmedBy "Warehouse Lead" ;
+    aesl:palletCount 5 ;
+    aesl:removed false ;
+    aesl:hasLocationSlit aesl:slit-1 , aesl:slit-2 .
+
+# Split location: 3 pallets in Warehouse, 2 in Back Tent -> sums to palletCount 5.
+aesl:slit-1
+    a aesl:LocationSlit ;
+    aesl:location "Warehouse" ;
+    aesl:count 3 .
+
+aesl:slit-2
+    a aesl:LocationSlit ;
+    aesl:location "Back Tent" ;
+    aesl:count 2 .

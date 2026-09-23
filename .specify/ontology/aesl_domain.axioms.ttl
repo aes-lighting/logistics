@@ -1,0 +1,213 @@
+# Curated axioms for the AES Logistics domain (JSON-driven).
+# Complements the generated structural TBox. Author: Markus Wesaw / speckit.
+# Disjointness, functional properties, the delivery lifecycle, and the
+# neurosymbolic ownership boundary (policies) live here.
+#
+# Ordering (subClassOf) is curated — the generator emits only stubs.
+# Enums/closed vocabularies are NOT hand-duplicated here; they live in the
+# generator-owned aesl_domain.shacl.enums.ttl.
+@prefix aesl: <http://aes-lighting.internal/logistics#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix dct:  <http://purl.org/dc/terms/> .
+
+<http://aes-lighting.internal/logistics/axioms>
+    a owl:Ontology ;
+    dct:title "AES Logistics Curated Axioms" ;
+    owl:versionInfo "0.1.0" ;
+    rdfs:comment "Curated TBox: disjointness, functional props, lifecycle, ownership policies." .
+
+#################################################################
+# Root + tier structure
+#################################################################
+
+aesl:LogisticsEntity
+    a owl:Class ;
+    rdfs:label "LogisticsEntity" ;
+    rdfs:comment "Abstract root for every business entity in the JSON stores." .
+
+aesl:Entity
+    a owl:Class ;
+    rdfs:subClassOf aesl:LogisticsEntity ;
+    rdfs:label "Entity" ;
+    rdfs:comment "Base for records that carry a uuid identity: Delivery, InventoryEntry, CalendarEvent." .
+
+aesl:ValueObject
+    a owl:Class ;
+    rdfs:subClassOf aesl:LogisticsEntity ;
+    rdfs:label "ValueObject" ;
+    rdfs:comment "Base for non-identity sub-structures: LineItem, Geotag, LocationSlit." .
+
+aesl:Artifact
+    a owl:Class ;
+    rdfs:subClassOf aesl:LogisticsEntity ;
+    rdfs:label "Artifact" ;
+    rdfs:comment "Base for file-backed items: DeliveryTicket, Signature, PhotoArtifact." .
+
+aesl:Entity owl:disjointWith aesl:ValueObject , aesl:Artifact .
+aesl:ValueObject owl:disjointWith aesl:Artifact .
+
+#################################################################
+# Concrete entities (generated TBox defines labels/stub hierarchy)
+#################################################################
+
+aesl:Delivery owl:subClassOf aesl:Entity .
+aesl:CalendarEvent owl:subClassOf aesl:Entity .
+aesl:InventoryEntry owl:subClassOf aesl:Entity .
+aesl:JobDirectoryEntry owl:subClassOf aesl:Entity .
+
+aesl:LineItem owl:subClassOf aesl:ValueObject .
+aesl:LocationSlit owl:subClassOf aesl:ValueObject .
+aesl:Geotag owl:subClassOf aesl:ValueObject .
+
+aesl:DeliveryTicket owl:subClassOf aesl:Artifact .
+aesl:Signature owl:subClassOf aesl:Artifact .
+aesl:PhotoArtifact owl:subClassOf aesl:Artifact .
+
+aesl:Delivery owl:disjointWith aesl:CalendarEvent , aesl:InventoryEntry , aesl:JobDirectoryEntry .
+
+#################################################################
+# Functional properties (identity & one-and-only-one attributes)
+#################################################################
+
+aesl:entityId
+    a owl:DatatypeProperty , owl:FunctionalProperty ;
+    rdfs:domain aesl:Entity ;
+    rdfs:range xsd:string ;
+    rdfs:comment "The store record uuid key (deliveries.<id> / entries.<id>). Unique per store." .
+
+aesl:jobNumber
+    a owl:DatatypeProperty , owl:FunctionalProperty ;
+    rdfs:label "jobNumber" ;
+    rdfs:comment "Human job number; on Delivery and InventoryEntry; joins the file ledger." .
+
+aesl:calendarEventUid
+    a owl:DatatypeProperty , owl:InverseFunctionalProperty ;
+    rdfs:domain aesl:Delivery ;
+    rdfs:comment "ICS node uid; at most one delivery may claim a given calendar event." .
+
+aesl:assignedDriver
+    a owl:DatatypeProperty , owl:FunctionalProperty ;
+    rdfs:domain aesl:Delivery ;
+    rdfs:comment "Driver name key (case-insensitive); zero (unassigned) or one." .
+
+aesl:status
+    a owl:DatatypeProperty , owl:FunctionalProperty ;
+    rdfs:domain aesl:Delivery ;
+    rdfs:range xsd:string ;
+    rdfs:comment "One of closed set {scheduled, ticket_uploaded, packed, en_route, completed}." .
+
+aesl:ticketSource
+    a owl:DatatypeProperty , owl:FunctionalProperty ;
+    rdfs:domain aesl:Delivery ;
+    rdfs:range xsd:string ;
+    rdfs:comment "One of closed set {uploaded, generated}." .
+
+aesl:removedReason
+    a owl:DatatypeProperty ;
+    rdfs:domain aesl:InventoryEntry ;
+    rdfs:range xsd:string ;
+    rdfs:comment "Closed set {packed_for_outgoing_delivery, manual}." .
+
+aesl:removed
+    a owl:DatatypeProperty , owl:FunctionalProperty ;
+    rdfs:domain aesl:InventoryEntry ;
+    rdfs:range xsd:boolean .
+
+#################################################################
+# Delivery lifecycle (curated, code-anchored)
+#################################################################
+
+# scheduling.py:135 — scheduled -> ticket_uploaded -> packed -> en_route -> completed.
+# revise_ticket (scheduling.py:315) may reset packed -> ticket_uploaded.
+# A delivery is driver-visible only when status in {packed, en_route}
+# (deliveries_assigned_to, scheduling.py:201).
+aesl:DeliveryLifecyclePolicy
+    a owl:Class ;
+    rdfs:label "DeliveryLifecyclePolicy" ;
+    rdfs:comment "scheduled -> ticket_uploaded -> packed -> en_route -> completed; packed may revert to ticket_uploaded on revision." .
+
+aesl:PolicyNoDriverBeforePacking
+    a aesl:DeliveryLifecyclePolicy , owl:NamedIndividual ;
+    rdfs:label "NoDriverBeforePacking" ;
+    rdfs:comment "A delivery may be driver-visible only after warehouse packing/checkoff (packed/en_route). Enforced in code; reflected here." .
+
+aesl:PolicyReviseResetsPacked
+    a aesl:DeliveryLifecyclePolicy , owl:NamedIndividual ;
+    rdfs:label "ReviseResetsPacked" ;
+    rdfs:comment "Ticket revision while packed resets to ticket_uploaded and clears packing; en_route/completed are never rolled back." .
+
+#################################################################
+# Inventory invariants
+#################################################################
+
+aesl:PalletSplitInvariant
+    a owl:Class ;
+    rdfs:comment "Sum(LocationSlit.count) == InventoryEntry.pallet_count when locations present and entry not removed." .
+
+aesl:PolicyMarkRemovedByJob
+    a aesl:PalletSplitInvariant , owl:NamedIndividual ;
+    rdfs:label "MarkRemovedByJob" ;
+    rdfs:comment "Packing a delivery auto-marks matching job-number inventory entries removed (mark_removed_by_job)." .
+
+#################################################################
+# Curated object edges (referenced by curated SHACL)
+#################################################################
+
+aesl:hasTicket
+    a owl:ObjectProperty ;
+    rdfs:domain aesl:Delivery ;
+    rdfs:range aesl:DeliveryTicket ;
+    rdfs:comment "Delivery -> its ticket artifact (at most one)." .
+
+aesl:hasLineItem
+    a owl:ObjectProperty ;
+    rdfs:domain aesl:Delivery ;
+    rdfs:range aesl:LineItem ;
+    rdfs:comment "Delivery -> generated ticket line items." .
+
+aesl:hasGeotag
+    a owl:ObjectProperty ;
+    rdfs:domain aesl:Delivery ;
+    rdfs:range aesl:Geotag ;
+    rdfs:comment "Delivery completion geotag (at most one)." .
+
+aesl:hasLocationSlit
+    a owl:ObjectProperty ;
+    rdfs:domain aesl:InventoryEntry ;
+    rdfs:range aesl:LocationSlit ;
+    rdfs:comment "InventoryEntry -> per-location pallet counts (split allowed)." .
+
+#################################################################
+# Neurosymbolic ownership boundary (policies)
+#################################################################
+
+aesl:HumanOwner
+    a owl:Class ;
+    rdfs:label "HumanOwner" ;
+    rdfs:comment "The accountable operator (Markus / PM / warehouse / driver as persons)." .
+
+aesl:CodingAgent
+    a owl:Class ;
+    rdfs:subClassOf owl:Thing ;
+    rdfs:label "CodingAgent" ;
+    rdfs:comment "An autonomous coding agent working on the repo/spec kit." .
+
+aesl:HermesAgent
+    a owl:Class ;
+    rdfs:subClassOf aesl:CodingAgent ;
+    rdfs:label "HermesAgent" ;
+    rdfs:comment "A Hermes Agent instance; inherits all CodingAgent policy." .
+
+aesl:PolicyNoAutoCompletesDelivery
+    rdf:type owl:Class , aesl:HumanOwner ;
+    aesl:overridesIngestPipelines owl:false ;
+    rdfs:label "PolicyNoAutoCompletesDelivery" ;
+    rdfs:comment "An agent must never flip a delivery status to completed, fabricate a signature/photo/geotag, or mark inventory removed on behalf of a human." .
+
+aesl:PolicyOntologyDoesNotReplacePipelines
+    rdf:type owl:Class , aesl:HumanOwner ;
+    rdfs:label "PolicyOntologyDoesNotReplacePipelines" ;
+    rdfs:comment "OWL/SHACL gates contract; the Flask app + frontends + sync scripts remain authoritative at runtime." .

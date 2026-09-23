@@ -29,6 +29,11 @@ Dockerfile / docker-compose.yml / railway.json / start.sh / AES_Logistics_Launch
 
 ## 3. ⚠️ Read these FIRST — the kit's explicit warnings
 
+0. **Ontology contract.** `.specify/ontology/` is a JSON-driven domain ontology
+   (`aesl:` namespace) gated by `.specify/scripts/run_validate_spec.sh`
+   (contract + SHACL + OWL-RL). It reflects the *real* HEAD code and `data-model.md`,
+   not the README. **Read it before changing the data model or inventory/
+   scheduling semantics**, and regenerate + re-validate after any such change.
 1. **Docs/app drift.** `README.md`, `.env.example`, `docker-compose.yml` describe an **embedded, shared-password auth** (`auth.py`, `auth_store.json`, `SHARED_PASSWORD`). That model was **removed** in commit `8c92283` and replaced by an external **auth-service microservice** on Railway. Treat README auth/config/docker text as stale unless it matches what you see in `.specify/` and `server/*.py`.
 2. **Contract drift (frontend ↔ server).** The frontends call endpoints `server/app.py` does **not** implement at HEAD: the session-based Incoming Inventory wizard (`/api/incoming/scan_page|confirm_job|pallet_photo|finalize`, `/api/inventory/pms`, `/api/schedule/warehouse/ready_to_pack`, `/send_to_pm`, `file/<ticket_filename>`) vs. server's single-shot `/api/incoming/scan|confirm|flag` + `/send_copy_to_pm` + `file/<int>`. Mapping table in `specs/001-server/contracts/api.md`. Do not "fix" one side without the other.
 3. **Broken script.** `server/send_daily_inventory_report.py` does `import auth` + `auth.list_users()` — that module was deleted. The daily report script **crashes at import**. See `ops/cron.md`.
@@ -45,3 +50,5 @@ Dockerfile / docker-compose.yml / railway.json / start.sh / AES_Logistics_Launch
 ## 5. Spec Kit (speckit) section
 
 Structure and conventions: `.specify/spec.md` (index), `.specify/product.md`, `.specify/architecture.md`, `.specify/memory/project-context.md`, `.specify/builds/{agent-playbook,mvp-v1}.md`, `specs/NNN-*/` (each: `spec.md`, `plan.md`, `tasks.md`, plus `data-model.md`/`contracts/` where topical), `design/`, `ops/`. Later specs cite the central `.specify/` pool rather than duplicating it.
+
+**Domain ontology** (`.specify/ontology/` + `.specify/scripts/`): `aesl:` namespace, JSON-driven (no SQL). See `.specify/ontology/README.md`. Validate with `.specify/scripts/run_validate_spec.sh`. Guidelines: never hand-edit generated TTL/enum files; regenerated artifacts must be committed in the same commit as the source change; an agent must never auto-complete a delivery or fabricate signatures/photos/geotags (`aesl:PolicyNoAutoCompletesDelivery`).
