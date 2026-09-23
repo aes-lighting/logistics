@@ -27,7 +27,7 @@
 
 | Method & path | Impl | Notes |
 |---|---|---|
-| POST `/api/upload` | ❌ **no handler at HEAD** | driver `app.js` posts multipart (metadata + photos). Decide/implement (WS-3). |
+| POST `/api/upload` | ✅ | `@login_required`. Multipart `metadata` JSON `{delivery_id, driver, completed_at, photos:[{filename,type,captured_at}]}` + one file part per photo keyed by its filename. OCRs job # from `ticket` photos → `<dest_dir>/Job_<n>/` (files prefixed with delivery id) or `<dest_dir>/needs_review_no_job_number/<delivery_id>/`; writes `<id>_metadata.json`; `<id>_INCOMPLETE_missing_pallet_photo.txt` if no `pallet` photo. Idempotent per `delivery_id`. Mirrors to AES File Service (`delivery_photo`, deterministic names) when a job # was read. → `{delivery_id, job_number, needs_review, incomplete, file_service}`. Previously 405 (no POST handler; fell through to the static GET catch-all). |
 
 ## Scheduled delivery
 

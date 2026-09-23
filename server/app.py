@@ -1104,6 +1104,112 @@ def api_incoming_flag():
     return jsonify({"status": "ok", "email_sent": sent, "email_error": err})
 
 
+### --- Ad-hoc delivery sync (driver app "Sync Now") — spec 001 WS-3 --- ###
+
+_ADHOC_ID_RE = re.compile(r"^[A-Za-z0-9\-_]{1,64}$")
+
+
+@app.route("/api/upload", methods=["POST"])
+@login_required
+def api_upload():
+    """
+    multipart: metadata (JSON {delivery_id, driver, completed_at, photos:[{filename,type,captured_at}]})
+               + one file part per photo, keyed by its filename.
+    OCRs the job number off the ticket photo(s) and files the delivery into
+    <dest_dir>/Job_<n>/ (or <dest_dir>/needs_review_no_job_number/<delivery_id>/).
+    Idempotent per delivery_id: a retried sync overwrites the same files.
+    Mirrors to the AES File Service (delivery_photo) when a job number was read.
+    """
+    try:
+        meta = json.loads(request.form.get("metadata") or "{}")
+    except json.JSONDecodeError:
+        return jsonify({"error": "metadata must be JSON"}), 400
+    delivery_id = str(meta.get("delivery_id") or "").strip()
+    if not _ADHOC_ID_RE.match(delivery_id):
+        return jsonify({"error": "missing or invalid delivery_id"}), 400
+
+    photos = []
+    for p in meta.get("photos") or []:
+        name = os.path.basename(str((p or {}).get("filename") or ""))
+        f = request.files.get(name) if name else None
+        if not f:
+            continue
+        photos.append({"filename": name, "type": (p.get("type") or "other"), "captured_at": p.get("captured_at"), "file": f})
+    if not photos:
+        return jsonify({"error": "no photos received"}), 400
+
+    # Save to a per-delivery staging dir first so OCR can read from disk.
+    stage = os.path.join(CFG["incoming_dir"], "_adhoc", delivery_id)
+    os.makedirs(stage, exist_ok=True)
+    for p in photos:
+        p["file"].save(os.path.join(stage, p["filename"]))
+
+    job_number = None
+    job_pattern = CFG.get("job_number_pattern", r"job\s*#?\s*:?\s*(?P<job>\d{3,8})")
+    for p in [p for p in photos if p["type"] == "ticket"]:
+        job_number = extract_job_number(os.path.join(stage, p["filename"]), job_pattern)
+        if job_number:
+            break
+
+    if job_number:
+        # Photo filenames already start with the delivery id, so a shared Job_<n>/ is fine.
+        dest = os.path.join(CFG["dest_dir"], f"Job_{re.sub(r'[^A-Za-z0-9-_]', '_', job_number)}")
+    else:
+        dest = os.path.join(CFG["dest_dir"], CFG["review_folder"], delivery_id)
+    os.makedirs(dest, exist_ok=True)
+
+    filed = []
+    for p in photos:
+        final = os.path.join(dest, p["filename"])
+        shutil.move(os.path.join(stage, p["filename"]), final)  # overwrite on retry
+        filed.append(final)
+
+    has_pallet = any(p["type"] == "pallet" for p in photos)
+    flag_name = f"{delivery_id}_{CFG['incomplete_flag_filename']}"
+    if not has_pallet:
+        with open(os.path.join(dest, flag_name), "w") as fh:
+            fh.write(f"Delivery {delivery_id} synced without a pallet/box photo.\n")
+
+    driver = str(meta.get("driver") or "") or get_auth_header() or "unknown"
+    with open(os.path.join(dest, f"{delivery_id}_metadata.json"), "w") as fh:
+        json.dump({
+            "delivery_id": delivery_id,
+            "job_number": job_number,
+            "driver": driver,
+            "completed_at": meta.get("completed_at"),
+            "synced_at": datetime.now().isoformat(),
+            "photos": [{k: p[k] for k in ("filename", "type", "captured_at")} for p in photos],
+            "incomplete_missing_pallet_photo": not has_pallet,
+        }, fh, indent=2)
+    shutil.rmtree(stage, ignore_errors=True)
+
+    if job_number:
+        counters = {}
+        items = []
+        for p, path in zip(photos, filed):
+            counters[p["type"]] = counters.get(p["type"], 0) + 1
+            with open(path, "rb") as fh:
+                # Deterministic name (delivery id, not a timestamp) so a retried
+                # sync overwrites instead of duplicating in the project folder.
+                ext = os.path.splitext(p["filename"])[1].lower() or ".jpg"
+                safe_type = re.sub(r"[^A-Za-z0-9-]", "", p["type"])
+                name = f"AdHoc_Job{re.sub(r'[^A-Za-z0-9-]', '', job_number)}_{delivery_id}_{safe_type}-{counters[p['type']]}{ext}"
+                items.append((AES_FILE_TYPE_DELIVERY_PHOTO, name, fh.read()))
+        aes_result = upload_files_to_aes(job_number, items)
+    else:
+        aes_result = {"success": False, "uploaded": [], "failed": [{"error": "no job number read from ticket — filed for review, not mirrored"}]}
+
+    log.info(f"Ad-hoc delivery {delivery_id} by {driver}: {len(photos)} photo(s) -> {dest}")
+    return jsonify({
+        "status": "ok",
+        "delivery_id": delivery_id,
+        "job_number": job_number,
+        "needs_review": job_number is None,
+        "incomplete": not has_pallet,
+        "file_service": {"success": aes_result["success"], "uploaded": len(aes_result["uploaded"]), "failed": aes_result["failed"]},
+    })
+
+
 ### --- Incoming Inventory wizard (session-based; spec 005 / contracts/api.md) --- ###
 #
 # The driver app's Incoming Inventory flow is a multi-step wizard:
@@ -1401,4 +1507,4 @@ def api_inventory_qr_pdf(entry_id):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False)

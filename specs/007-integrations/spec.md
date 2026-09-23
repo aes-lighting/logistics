@@ -44,7 +44,9 @@ unconfigured service.
   on 2026-09-23 (requires a service restart to load).
 - **Failure**: non-fatal. Result is returned to the caller as
   `file_service: {success, uploaded, failed:[{file,error}]}` on `/complete` and `/finalize`.
-- **Ad-hoc sync** (`/api/upload` on *this* app) still has no handler (001 WS-3).
+- **Ad-hoc sync** (`/api/upload` on *this* app, 001 WS-3): mirrors ticket + pallet photos as `delivery_photo`
+  only when OCR read a job number; names are `AdHoc_Job<n>_<delivery_id>_<type>-<i>.<ext>`
+  (deterministic, so a retried sync overwrites rather than duplicates).
 
 ## SMTP (emailer.py)
 - Env `SMTP_HOST/PORT/USERNAME/PASSWORD/FROM/USE_TLS`; `send_flag_email(to,subject,body,attachment_paths)`.
@@ -73,4 +75,4 @@ Any change here updates this spec in the same commit.
 - [x] Rewire File Service calls to the real `/api/upload` contract; mirror incoming slips + pallet photos.
 - [ ] Decide whether ad-hoc `/api/upload` mirrors to AES (001-WS-3).
 - [ ] Verify auth-service admin endpoints + error surface (timeout/503) are handled by callers.
-- [ ] Add a config-absence table test: each integration returns its sentinel when env unset.
+- [ ] Add a config-absence table test: each integration returns its sentinel when env unset.

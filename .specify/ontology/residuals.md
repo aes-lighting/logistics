@@ -10,10 +10,10 @@ change — **not a Phase 9.** Policy: `aesl:PolicyNoOntologyPhase9`.
   delivery→line-item, entry→location-slit yet. This is deliberate: the PM-portal
   / inventory / scheduling route reconciliation (specs 001/005/006 F4) changes the
   edges before they are worth locking. Add Phase 4 after those contracts close.
-- **Ad-hoc "New Delivery" flow** remains deferred (`ad_hoc_delivery`): the driver
-  app still supports non-scheduled deliveries (sync via `/api/upload`), but the
-  upload handler is not implemented at HEAD — the entity is not TBox'd until the
-  wire contract exists.
+- **Ad-hoc "New Delivery" flow** entity remains deferred (`ad_hoc_delivery`):
+  `/api/upload` now has a handler (files to `organized/` + a per-delivery
+  `<id>_metadata.json`, mirrors to the File Service), but there is still no JSON
+  store for ad-hoc deliveries, so the entity is not TBox'd yet.
 - **OCR extraction outcome** is not an entity (`ocr_extraction`): job/PO numbers
   read off the slip are flattened into the entry; a dedicated extraction class is
   deferred until the OCR path is reconciled.
@@ -35,7 +35,7 @@ Each requires Markus approval and a new numbered Spec before implementation.
 | Item | When it may start | Policy |
 |------|-------------------|--------|
 | Phase 4 graph edges | After spec 001/005/006 F4 contract reconciliation closes | `aesl:PolicyNoPhase4BeforeReconcile` |
-| Ad-hoc delivery / upload entity | When `/api/upload` has a real handler + store | `aesl:PolicyAdHocDeferred` |
+| Ad-hoc delivery / upload entity | Handler landed 2026-09-23; start when ad-hoc deliveries get a JSON store | `aesl:PolicyAdHocDeferred` |
 | OCR extraction entity | Dedicated Spec or promotion in data-model.md | `aesl:PolicyOcrDeferred` |
 | SMS/ETA entities | When they gain a store / persisted state | `aesl:PolicySmsEtaDeferred` |
 | ~~Pallet-split server-side gate~~ — landed with A3 (`api_incoming_finalize`) | Done | `aesl:PolicyPalletSplitCodeGate` |
@@ -50,4 +50,4 @@ single contract. Do not invent a second ontology for the frontends or MCP tools.
 or geotag, or mark inventory removed on its own. That is human-owned work
 (`aesl:PolicyNoAutoCompletesDelivery`). The OWL/SHACL layer gates the contract;
 the Flask app + frontends + sync scripts remain authoritative at runtime
-(`aesl:PolicyOntologyDoesNotReplacePipelines`).
+(`aesl:PolicyOntologyDoesNotReplacePipelines`).

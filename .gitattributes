@@ -1,0 +1,11 @@
+# Store text with LF in the repo regardless of the committer's OS/autocrlf.
+# (Windows commits were converting whole files to CRLF, which made every diff a
+#  full-file rewrite and broke the Spec Kit snapshot-hash gate.)
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.pdf binary
+*.xlsx binary
